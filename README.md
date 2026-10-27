@@ -98,6 +98,10 @@ It downloads the app from this repository, checks the files, enables `on-this-da
 
 Album data comes from [MusicBrainz](https://musicbrainz.org/) (published as daily files on this repository's GitHub Pages); covers from the Cover Art Archive, Spotify and iTunes; artist photos from Spotify (and Wikipedia when needed). The app talks to Spotify only through your own signed-in Spotify session (no passwords, tokens or logins are requested or stored) and checks this repository for new versions. There is no tracking or analytics. The code you run is the readable, non-minified `index.js` in this repository.
 
+<a href="https://ko-fi.com/uwaazy" target="_blank">
+  <img src="https://img.shields.io/badge/Support%20my%20Work-FF5E5B?style=for-the-badge&logo=kofi&logoColor=white" alt="Ko-fi Donate">
+</a>
+
 ## License
 
 Released under the **MIT License** — see [LICENSE](LICENSE).

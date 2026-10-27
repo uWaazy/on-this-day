@@ -1,29 +1,4 @@
 #!/usr/bin/env node
-/**
- * Atualização INCREMENTAL do catálogo (sem baixar o dump de 1 GB).
- *
- * Busca no MusicBrainz só os álbuns lançados desde a última sincronização, ignora os que o
- * catálogo já tem (por MBID) e grava os novos nos arquivos diários data/site/catalog/MM-DD.json.
- * Pode ser executado quantas vezes quiser: não duplica nada e retoma de onde parou.
- *
- *   npm run catalog:update
- *   node .github/catalog/update-catalog.mjs --since 2026-01-01 --dry-run
- *
- * Opções:
- *   --dir <pasta>     catálogo diário (padrão: data/site/catalog)
- *   --since <data>    início da busca (padrão: última sincronização − 14 dias)
- *   --until <data>    fim da busca (padrão: 31/12 do ano atual, como o gerador do catálogo)
- *   --no-lookup       não consulta gêneros/notas de cada álbum novo (mais rápido; usa as tags da busca)
- *   --dry-run         só mostra o que seria adicionado
- *   --max <n>         para depois de n álbuns novos
- *   --api <url>       servidor da API (padrão: https://musicbrainz.org/ws/2)
- *   --delay <ms>      intervalo entre requisições (padrão 1100; o MusicBrainz exige ≤ 1 por segundo)
- *   --contact <info>  e-mail/URL enviado no User-Agent (ou variável MB_CONTACT)
- *
- * Limitação: encontra álbuns pela data de lançamento. Álbuns antigos cadastrados tardiamente no
- * MusicBrainz, ou notas/gêneros alterados depois, só entram com a regeneração completa
- * (npm run catalog:refresh), que o workflow mensal do GitHub já faz.
- */
 
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -53,7 +28,6 @@ function fsHelp() {
   return "Uso: node .github/catalog/update-catalog.mjs [--dir pasta] [--since AAAA-MM-DD] [--until AAAA-MM-DD] [--no-lookup] [--dry-run] [--max n] [--api url] [--delay ms] [--contact info]";
 }
 
-// --dir relativo vale a partir da pasta atual; o padrão fica dentro do projeto.
 const catalogDir = args.values.dir ? path.resolve(process.cwd(), args.values.dir) : path.join(projectRoot, "data/site/catalog");
 const statePath = path.join(path.dirname(catalogDir), "catalog-state.json");
 const apiBase = (args.values.api ?? "https://musicbrainz.org/ws/2").replace(/\/+$/, "");
@@ -69,7 +43,6 @@ const isoDate = (date) => date.toISOString().slice(0, 10);
 const addDays = (iso, days) => isoDate(new Date(Date.parse(`${iso}T00:00:00Z`) + days * 86400000));
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
-/* ---------------------------- HTTP educado com o MusicBrainz ---------------------------- */
 
 let lastRequest = 0;
 async function mbGet(pathAndQuery) {
@@ -100,9 +73,7 @@ async function mbGet(pathAndQuery) {
   throw new Error(`Falha após várias tentativas: ${url}`);
 }
 
-/* --------------------------------- arquivos do catálogo --------------------------------- */
-
-const dayFiles = new Map(); // monthDay -> { data, dirty, ids:Set }
+const dayFiles = new Map();
 
 async function loadDay(monthDay) {
   let entry = dayFiles.get(monthDay);
@@ -145,7 +116,6 @@ async function writeState(syncedUntil) {
   await atomicWrite(statePath, JSON.stringify({ schemaVersion: 1, syncedUntil, updatedAt: new Date().toISOString() }, null, 2));
 }
 
-/** Sem estado salvo: usa a data de geração dos arquivos (a do dump de onde o catálogo veio). */
 async function inferSince() {
   let newest = null;
   for (const monthDay of ["01-01", "06-15", "12-31"]) {
@@ -153,12 +123,11 @@ async function inferSince() {
       const data = JSON.parse(await fs.readFile(path.join(catalogDir, `${monthDay}.json`), "utf8"));
       const generated = typeof data.generatedAt === "string" ? data.generatedAt.slice(0, 10) : null;
       if (generated && (!newest || generated > newest)) newest = generated;
-    } catch { /* tenta o próximo */ }
+    } catch { }
   }
   return newest;
 }
 
-/* ------------------------------------ conversão ------------------------------------ */
 
 function artistNamesOf(row) {
   const credits = Array.isArray(row["artist-credit"]) ? row["artist-credit"] : [];
@@ -186,8 +155,6 @@ function toCatalogItem(searchRow, detail) {
     ratingValue: Number(detail?.rating?.value ?? 0),
   };
 }
-
-/* -------------------------------------- principal -------------------------------------- */
 
 const minYear = Number(process.env.MB_MIN_YEAR ?? 1900);
 const today = isoDate(new Date());
@@ -221,7 +188,6 @@ let skippedInvalid = 0;
 const touched = new Set();
 let reachedMax = false;
 
-// Janelas de 7 dias: cada uma tem poucas centenas de álbuns e dá para gravar o progresso a cada uma.
 for (let start = since; start <= until && !reachedMax; start = addDays(start, 8)) {
   const end = addDays(start, 7) < until ? addDays(start, 7) : until;
   const query = encodeURIComponent(`primarytype:album AND firstreleasedate:[${start} TO ${end}]`);

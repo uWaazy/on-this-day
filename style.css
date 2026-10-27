@@ -37,20 +37,18 @@
   overflow-x: clip;
 }
 
-/* Sticky (e não fixed): `fixed` falha dentro de contêineres com transform e só cobria o topo.
-   Fica colado ao topo da área rolável e ocupa a altura visível, acompanhando toda a rolagem. */
+
 .otd-dynamic-bg {
   position: sticky;
   top: 0;
   z-index: 0;
   height: 100vh;
-  /* sobe até o topo da página e não ocupa espaço no layout: -top + 100vh + (top - 100vh) = 0 */
+
   margin: calc(var(--otd-page-top) * -1) -32px calc(var(--otd-page-top) - 100vh) -56px;
   pointer-events: none;
   overflow: hidden;
 }
 
-/* Fundo dinâmico: composição de até 6 fotos, em camada independente atrás da interface. */
 .otd-bg-slot {
   position: absolute;
   overflow: hidden;
@@ -66,11 +64,11 @@
   inset: 0;
   background-size: cover;
   background-position: center 22%;
-  transform: scale(1.04); /* sem filter: animar opacidade sobre filtros pesa na GPU; o escurecimento vem do overlay */
+  transform: scale(1.04);
   will-change: opacity;
 }
 
-/* Capas de álbum alternam com a foto do artista: mais suaves para não competir com o conteúdo. */
+
 .otd-bg-photo--cover {
   filter: blur(5px);
   transform: scale(1.12);
@@ -739,7 +737,7 @@
   z-index: 2;
 }
 
-/* Notas: usuários (verde) e críticos (azul). Dado indisponível tem estado próprio, nunca "0". */
+
 .otd-scores {
   display: grid;
   grid-template-columns: 1fr 1fr;
@@ -944,7 +942,7 @@
   width: max-content;
   min-width: 112px;
   max-width: min(220px, calc(100vw - 92px));
-  height: auto;           /* compacto: com poucos anos a barra encolhe e fica centralizada na janela */
+  height: auto;           
   max-height: 100%;
   padding: 12px 8px 10px;
   border: 1px solid rgba(255,255,255,.1);
@@ -1395,12 +1393,12 @@
 }
 
 
-/* Botão flutuante: só artistas que eu sigo */
+
 .otd-fab-wrap {
   position: fixed;
   right: 24px;
   bottom: 112px;
-  z-index: 900; /* abaixo dos painéis do Spotify; a posição acompanha a área principal (ver FollowFab) */
+  z-index: 900; 
   display: flex;
   align-items: center;
   gap: 10px;
@@ -1483,7 +1481,7 @@
 .otd-order-btn:hover { background: rgba(255,255,255,.12); border-color: var(--otd-border-hover); }
 .otd-order-btn:focus-visible { outline: 2px solid var(--otd-accent); outline-offset: 2px; }
 
-/* Popover de informação das notas (o `title` nativo não aparece de forma confiável no Spotify) */
+
 .otd-score { cursor: help; border-radius: 6px; }
 .otd-score:focus-visible { outline: 2px solid var(--otd-accent); outline-offset: 3px; }
 
@@ -1505,14 +1503,14 @@
 
 .otd-info-pop--above { transform: translateY(-100%); }
 
-/* Só nota de usuários (nota de críticos desativada): uma coluna, valor ao lado do rótulo */
+
 .otd-scores--single { grid-template-columns: 1fr; }
 .otd-scores--single .otd-score-top { flex-direction: row; align-items: baseline; justify-content: space-between; }
 .otd-scores--single .otd-score-label { font-size: 11px; }
 
 
 
-/* ===== Selo de versão / atualização ===== */
+
 .otd-version-badge {
   display: inline-flex;
   align-items: center;

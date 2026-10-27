@@ -98,6 +98,10 @@ Descarga la app de este repositorio, comprueba los archivos, activa `on-this-day
 
 Los datos de los álbumes vienen de [MusicBrainz](https://musicbrainz.org/) (publicados como archivos diarios en el GitHub Pages de este repositorio); las portadas, de Cover Art Archive, Spotify e iTunes; las fotos de artistas, de Spotify (y de Wikipedia cuando hace falta). La app habla con Spotify solo a través de tu propia sesión ya iniciada (no se piden ni guardan contraseñas, tokens ni inicios de sesión) y consulta este repositorio para saber si hay versiones nuevas. No hay rastreo ni analíticas. El código que ejecutas es el `index.js` legible, sin minificar, de este repositorio.
 
+<a href="https://ko-fi.com/uwaazy" target="_blank">
+  <img src="https://img.shields.io/badge/Support%20my%20Work-FF5E5B?style=for-the-badge&logo=kofi&logoColor=white" alt="Ko-fi Donate">
+</a>
+
 ## Licencia
 
 Publicado bajo la **Licencia MIT** — consulta [LICENSE](LICENSE).
