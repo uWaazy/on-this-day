@@ -1,3 +1,7 @@
+/* On This Day v1.1.2 — https://github.com/uWaazy/on-this-day
+ * Bundle legível (sem minificação), gerado a partir do código-fonte do projeto.
+ * Roda dentro do Spotify via Spicetify; consulta só: Spotify (sessão local), MusicBrainz/Cover Art Archive (catálogo),
+ * GitHub (verificação de nova versão). Sem coleta de dados e sem credenciais. */
 "use strict";
 (() => {
   // src/react.ts
@@ -956,7 +960,7 @@
   }
 
   // src/services/updates.ts
-  var APP_VERSION = true ? "1.1.1" : "0.0.0";
+  var APP_VERSION = true ? "1.1.2" : "0.0.0";
   var REPO = true ? "uWaazy/on-this-day" : "uWaazy/on-this-day";
   var REPO_URL = `https://github.com/${REPO}`;
   var RAW_BASE = `https://raw.githubusercontent.com/${REPO}/main`;
