@@ -1,0 +1,31 @@
+name: Build Spicetify app
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: npm run build
+        env:
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          OTD_SPOTIFY_CLIENT_ID: ${{ vars.OTD_SPOTIFY_CLIENT_ID }}
+          OTD_SPOTIFY_REDIRECT_URI: ${{ vars.OTD_SPOTIFY_REDIRECT_URI }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: on-this-day-spicetify
+          path: dist/
+          if-no-files-found: error
+          retention-days: 30
