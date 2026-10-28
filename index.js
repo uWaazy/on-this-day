@@ -1,4 +1,4 @@
-/* On This Day v1.1.2 — https://github.com/uWaazy/on-this-day
+/* On This Day v1.1.3 — https://github.com/uWaazy/on-this-day
  * Bundle legível (sem minificação), gerado a partir do código-fonte do projeto.
  * Roda dentro do Spotify via Spicetify; consulta só: Spotify (sessão local), MusicBrainz/Cover Art Archive (catálogo),
  * GitHub (verificação de nova versão). Sem coleta de dados e sem credenciais. */
@@ -24,7 +24,7 @@
   var WINDOW_DAYS = 2;
   var EXPECTED_SCHEMA_VERSION = 2;
   var CACHE_VERSION_KEY = "on-this-day:cache-version";
-  var CACHE_VERSION = "2";
+  var CACHE_VERSION = "3";
   var REVALIDATE_AFTER_MS = 24 * 60 * 60 * 1e3;
   function bustOldCache() {
     try {
@@ -51,7 +51,7 @@
   }
   function offsetMonthDay(offsetDays) {
     const d = /* @__PURE__ */ new Date();
-    d.setUTCDate(d.getUTCDate() + offsetDays);
+    d.setDate(d.getDate() + offsetDays);
     return monthDayFor(d);
   }
   function cacheKey(monthDay) {
@@ -105,7 +105,7 @@
     await Promise.all(
       offsets.map((o) => {
         const d = new Date(today);
-        d.setUTCDate(d.getUTCDate() + o);
+        d.setDate(d.getDate() + o);
         const md = monthDayFor(d);
         return (async () => {
           try {
@@ -142,11 +142,11 @@
       cache: "no-cache"
     });
     if (!response.ok) {
-      throw new Error(`Catálogo indisponível (${response.status}).`);
+      throw new Error(`CatÃ¡logo indisponÃ­vel (${response.status}).`);
     }
     const value = await response.json();
     if (!isValidCatalog(value, monthDay)) {
-      throw new Error("O catálogo publicado tem um formato inválido.");
+      throw new Error("O catÃ¡logo publicado tem um formato invÃ¡lido.");
     }
     const catalog = value;
     writeCache(cacheKey(monthDay), catalog);
@@ -960,7 +960,7 @@
   }
 
   // src/services/updates.ts
-  var APP_VERSION = true ? "1.1.2" : "0.0.0";
+  var APP_VERSION = true ? "1.1.3" : "0.0.0";
   var REPO = true ? "uWaazy/on-this-day" : "uWaazy/on-this-day";
   var REPO_URL = `https://github.com/${REPO}`;
   var RAW_BASE = `https://raw.githubusercontent.com/${REPO}/main`;
