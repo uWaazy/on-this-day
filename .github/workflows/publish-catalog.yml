@@ -2,7 +2,8 @@ name: Publish daily catalog
 
 on:
   push:
-    branches: [main]
+    branches:
+      - main
     paths:
       - ".github/workflows/publish-catalog.yml"
       - ".github/catalog/build-musicbrainz-catalog.mjs"
@@ -23,14 +24,16 @@ concurrency:
 
 jobs:
   publish:
+    runs-on: ubuntu-latest
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
-    runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout repository
+        uses: actions/checkout@v4
 
-      - uses: actions/setup-node@v4
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
         with:
           node-version: 24
 
@@ -44,15 +47,23 @@ jobs:
 
       - name: Add catalog landing page
         run: |
+          mkdir -p site
           cat > site/index.html <<'HTML'
           <!doctype html>
-          <html lang="en"><meta charset="utf-8"><title>On This Day catalog</title>
-          <body><h1>On This Day catalog</h1><p>Daily album anniversary data powered by MusicBrainz.</p></body></html>
+          <html lang="en">
+          <head><meta charset="utf-8"><title>On This Day catalog</title></head>
+          <body><h1>On This Day catalog</h1><p>Daily album anniversary data powered by MusicBrainz.</p></body>
+          </html>
           HTML
 
-      - uses: actions/configure-pages@v5
-      - uses: actions/upload-pages-artifact@v3
+      - name: Configure GitHub Pages
+        uses: actions/configure-pages@v5
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
         with:
           path: site
-      - id: deployment
+
+      - name: Deploy to GitHub Pages
+        id: deployment
         uses: actions/deploy-pages@v4
