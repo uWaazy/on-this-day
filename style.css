@@ -1698,3 +1698,201 @@
 }
 
 .otd-update-done:hover { background: rgba(255,255,255,.1); }
+
+/* ===== Botão "Dia anterior" (abaixo do seletor de idioma) ===== */
+.otd-header-controls {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 8px;
+}
+
+.otd-prev-day {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  min-height: 34px;
+  padding: 0 14px 0 11px;
+  border: 1px solid var(--otd-border);
+  border-radius: var(--otd-radius-pill);
+  color: var(--otd-text-secondary);
+  background: rgba(255,255,255,.06);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 700;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background .18s ease, border-color .18s ease, color .18s ease, transform .12s ease;
+}
+
+.otd-prev-day:hover { color: var(--otd-text); background: rgba(255,255,255,.12); border-color: var(--otd-border-hover); }
+.otd-prev-day:active { transform: scale(.97); }
+.otd-prev-day:focus-visible { outline: 2px solid var(--otd-accent); outline-offset: 2px; }
+
+/* ===== Abas Álbuns / Artistas ===== */
+.otd-tabs {
+  display: inline-flex;
+  gap: 4px;
+  margin: -6px 0 22px;
+  padding: 4px;
+  border: 1px solid var(--otd-border);
+  border-radius: var(--otd-radius-pill);
+  background: rgba(255,255,255,.04);
+}
+
+.otd-tab {
+  min-height: 34px;
+  padding: 0 20px;
+  border: 0;
+  border-radius: var(--otd-radius-pill);
+  color: var(--otd-text-secondary);
+  background: transparent;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: background .18s ease, color .18s ease;
+}
+
+.otd-tab:hover { color: var(--otd-text); background: rgba(255,255,255,.08); }
+.otd-tab:focus-visible { outline: 2px solid var(--otd-accent); outline-offset: 1px; }
+.otd-tab.is-active { color: #06130b; background: var(--otd-accent); }
+
+/* ===== Botão "Tentar de novo" ===== */
+.otd-retry-btn {
+  min-height: 36px;
+  margin-top: 12px;
+  padding: 0 18px;
+  border: 1px solid var(--otd-border);
+  border-radius: var(--otd-radius-pill);
+  color: var(--otd-text);
+  background: rgba(255,255,255,.08);
+  font: inherit;
+  font-size: 12.5px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: background .18s ease, border-color .18s ease;
+}
+
+.otd-retry-btn:hover { background: rgba(255,255,255,.14); border-color: var(--otd-border-hover); }
+.otd-retry-btn:focus-visible { outline: 2px solid var(--otd-accent); outline-offset: 2px; }
+
+/* ===== Aniversários de artistas ===== */
+.otd-artist-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(176px, 1fr));
+  gap: 16px;
+}
+
+.otd-artist-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  min-width: 0;
+  padding: 20px 14px 16px;
+  border: 1px solid rgba(255,255,255,.075);
+  border-radius: 12px;
+  background: linear-gradient(180deg, rgba(25,29,32,.94), rgba(17,20,23,.96));
+  text-align: center;
+  transition: transform var(--otd-transition), border-color var(--otd-transition), background var(--otd-transition);
+}
+
+.otd-artist-card:hover {
+  transform: translateY(-3px);
+  border-color: rgba(30,215,96,.28);
+  background: linear-gradient(180deg, rgba(34,40,43,.98), rgba(20,24,27,.98));
+}
+
+.otd-artist-photo-wrap { width: 112px; height: 112px; margin-bottom: 14px; }
+
+.otd-artist-photo {
+  position: relative;
+  display: block;
+  width: 100%;
+  height: 100%;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  overflow: hidden;
+  background: #1a1a1a;
+  box-shadow: 0 8px 22px rgba(0,0,0,.45);
+  cursor: pointer;
+  transition: transform .2s ease, box-shadow .2s ease;
+}
+
+.otd-artist-photo:hover { transform: scale(1.05); box-shadow: 0 0 0 3px var(--otd-accent), 0 10px 26px rgba(0,0,0,.5); }
+.otd-artist-photo:focus-visible { outline: 2px solid var(--otd-accent); outline-offset: 3px; }
+
+.otd-artist-photo img { display: block; width: 100%; height: 100%; object-fit: cover; }
+
+.otd-artist-initials {
+  display: grid;
+  place-items: center;
+  width: 100%;
+  height: 100%;
+  color: rgba(255,255,255,.88);
+  font-size: 34px;
+  font-weight: 800;
+  letter-spacing: .02em;
+}
+
+.otd-artist-card-name {
+  max-width: 100%;
+  margin: 0 0 4px;
+  overflow: hidden;
+  color: var(--otd-text);
+  font-size: 15px;
+  font-weight: 800;
+  line-height: 1.3;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.otd-artist-age { margin: 0 0 2px; color: var(--otd-accent); font-size: 13px; font-weight: 800; }
+.otd-artist-born { margin: 0 0 2px; color: var(--otd-text-secondary); font-size: 12px; }
+.otd-artist-country { margin: 0 0 2px; color: var(--otd-text-muted); font-size: 12px; font-weight: 600; }
+
+.otd-artist-genres {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 5px;
+  margin-top: 10px;
+}
+
+.otd-artist-genre {
+  padding: 3px 9px;
+  border: 1px solid rgba(255,255,255,.12);
+  border-radius: 999px;
+  color: #cfcfcf;
+  background: rgba(255,255,255,.05);
+  font-size: 10.5px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+@media (max-width: 700px) {
+  .otd-header-controls { align-items: flex-start; }
+  .otd-artist-grid { grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 12px 10px; }
+}
+
+/* ===== Navegação entre dias: dia anterior / próximo dia / hoje ===== */
+.otd-day-nav {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.otd-prev-day:disabled {
+  opacity: .4;
+  cursor: not-allowed;
+}
+
+.otd-prev-day:disabled:hover { color: var(--otd-text-secondary); background: rgba(255,255,255,.06); border-color: var(--otd-border); }
+.otd-next-day { padding: 0 11px 0 14px; }
+.otd-today-btn { padding: 0 14px; color: var(--otd-accent); }
+
+@media (max-width: 700px) {
+  .otd-day-nav { justify-content: flex-start; }
+}

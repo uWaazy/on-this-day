@@ -9,6 +9,7 @@ on:
       - ".github/catalog/build-musicbrainz-catalog.mjs"
       - ".github/catalog/split-musicbrainz-catalog.mjs"
       - ".github/catalog/download-musicbrainz-catalog.mjs"
+      - ".github/catalog/build-birthdays-catalog.mjs"
   workflow_dispatch:
   schedule:
     - cron: "17 4 1 * *"
@@ -25,6 +26,7 @@ concurrency:
 jobs:
   publish:
     runs-on: ubuntu-latest
+    timeout-minutes: 120
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
@@ -44,6 +46,44 @@ jobs:
         run: |
           node .github/catalog/build-musicbrainz-catalog.mjs "${{ runner.temp }}/release-group.tar.xz" "${{ runner.temp }}/catalog.json"
           node .github/catalog/split-musicbrainz-catalog.mjs "${{ runner.temp }}/catalog.json" "site/catalog"
+          rm -f "${{ runner.temp }}/release-group.tar.xz" "${{ runner.temp }}/catalog.json"
+
+      # Nunca publica um catálogo de álbuns incompleto: sem os 366 dias o app quebraria nos dias que faltam.
+      - name: Validate album catalog
+        run: |
+          count=$(ls site/catalog/*.json | wc -l)
+          echo "Album day files: $count"
+          test "$count" -ge 366
+          test -f site/catalog/02-29.json
+
+      # Aniversários de artistas (aba "Artistas"). Se falhar, os álbuns continuam sendo publicados
+      # normalmente e o app mostra um aviso na aba "Artistas" em vez de quebrar.
+      - name: Download MusicBrainz artist dump
+        id: artist-dump
+        continue-on-error: true
+        run: node .github/catalog/download-musicbrainz-catalog.mjs "${{ runner.temp }}/artist.tar.xz" artist
+
+      - name: Build artist birthdays
+        id: birthdays
+        if: steps.artist-dump.outcome == 'success'
+        continue-on-error: true
+        run: |
+          node .github/catalog/build-birthdays-catalog.mjs "${{ runner.temp }}/artist.tar.xz" "${{ runner.temp }}/birthdays"
+          count=$(ls "${{ runner.temp }}/birthdays"/*.json | wc -l)
+          echo "Birthday day files: $count"
+          test "$count" -ge 366
+          mkdir -p site/catalog/birthdays
+          cp "${{ runner.temp }}/birthdays"/*.json site/catalog/birthdays/
+          rm -f "${{ runner.temp }}/artist.tar.xz"
+
+      - name: Report birthdays status
+        if: always()
+        run: |
+          if [ "${{ steps.birthdays.outcome }}" = "success" ]; then
+            echo "Artist birthdays published."
+          else
+            echo "::warning::Artist birthdays were NOT published (the albums catalog was). The Artists tab will show a notice until the next successful run."
+          fi
 
       - name: Add catalog landing page
         run: |
@@ -52,7 +92,7 @@ jobs:
           <!doctype html>
           <html lang="en">
           <head><meta charset="utf-8"><title>On This Day catalog</title></head>
-          <body><h1>On This Day catalog</h1><p>Daily album anniversary data powered by MusicBrainz.</p></body>
+          <body><h1>On This Day catalog</h1><p>Daily album anniversary and artist birthday data powered by MusicBrainz.</p></body>
           </html>
           HTML
 

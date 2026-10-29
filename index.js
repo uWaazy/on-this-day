@@ -1,4 +1,4 @@
-/* On This Day v1.1.3 — https://github.com/uWaazy/on-this-day
+/* On This Day v1.1.4 — https://github.com/uWaazy/on-this-day
  * Bundle legível (sem minificação), gerado a partir do código-fonte do projeto.
  * Roda dentro do Spotify via Spicetify; consulta só: Spotify (sessão local), MusicBrainz/Cover Art Archive (catálogo),
  * GitHub (verificação de nova versão). Sem coleta de dados e sem credenciais. */
@@ -21,7 +21,8 @@
 
   // src/api/catalog.ts
   var CACHE_PREFIX = "on-this-day:catalog:";
-  var WINDOW_DAYS = 2;
+  var KEEP_BEHIND = 1;
+  var KEEP_AHEAD = 1;
   var EXPECTED_SCHEMA_VERSION = 2;
   var CACHE_VERSION_KEY = "on-this-day:cache-version";
   var CACHE_VERSION = "3";
@@ -54,6 +55,10 @@
     d.setDate(d.getDate() + offsetDays);
     return monthDayFor(d);
   }
+  function previousMonthDay(monthDay) {
+    const [month, day] = monthDay.split("-").map(Number);
+    return monthDayFor(new Date(2024, month - 1, day - 1));
+  }
   function cacheKey(monthDay) {
     return `${CACHE_PREFIX}${monthDay}`;
   }
@@ -68,19 +73,31 @@
       return null;
     }
   }
-  function writeCache(key, value) {
+  function writeCache(monthDay, value) {
+    const key = cacheKey(monthDay);
+    const payload = JSON.stringify({ ...value, cachedAt: Date.now() });
     try {
-      localStorage.setItem(key, JSON.stringify({ ...value, cachedAt: Date.now() }));
+      localStorage.setItem(key, payload);
+      return;
+    } catch {
+    }
+    try {
+      for (let i = 0; i < localStorage.length; ) {
+        const other = localStorage.key(i);
+        if (other && other.startsWith(CACHE_PREFIX) && other !== key) localStorage.removeItem(other);
+        else i++;
+      }
+      localStorage.setItem(key, payload);
     } catch {
     }
   }
   function isValidCatalog(value, monthDay) {
     return typeof value === "object" && value !== null && "schemaVersion" in value && value.schemaVersion === EXPECTED_SCHEMA_VERSION && "monthDay" in value && value.monthDay === monthDay && "items" in value && Array.isArray(value.items);
   }
-  function pruneCache(todayKey) {
+  function pruneCache(viewedMonthDay) {
     try {
-      const keep = /* @__PURE__ */ new Set();
-      for (let i = -WINDOW_DAYS; i <= WINDOW_DAYS; i++) {
+      const keep = /* @__PURE__ */ new Set([viewedMonthDay]);
+      for (let i = -KEEP_BEHIND; i <= KEEP_AHEAD; i++) {
         keep.add(offsetMonthDay(i));
       }
       for (let i = 0; i < localStorage.length; ) {
@@ -99,28 +116,48 @@
     } catch {
     }
   }
-  async function prefetchNearbyDays() {
-    const today = /* @__PURE__ */ new Date();
-    const offsets = [-2, -1, 1, 2];
+  var inflight = /* @__PURE__ */ new Map();
+  function fetchDay(monthDay) {
+    const existing = inflight.get(monthDay);
+    if (existing) return existing;
+    const pending = (async () => {
+      let response;
+      try {
+        response = await fetch(`${"https://uwaazy.github.io/on-this-day/catalog"}/${monthDay}.json`, {
+          method: "GET",
+          cache: "no-cache"
+        });
+      } catch (error) {
+        throw new Error(`Sem conexão com o servidor do catálogo (${error instanceof Error ? error.message : String(error)}).`);
+      }
+      if (!response.ok) {
+        throw new Error(`Catálogo indisponível (${response.status}).`);
+      }
+      let value;
+      try {
+        value = await response.json();
+      } catch {
+        throw new Error("O catálogo publicado tem um formato inválido.");
+      }
+      if (!isValidCatalog(value, monthDay)) {
+        throw new Error("O catálogo publicado tem um formato inválido.");
+      }
+      return value;
+    })().finally(() => inflight.delete(monthDay));
+    inflight.set(monthDay, pending);
+    return pending;
+  }
+  async function prefetchNearbyDays(viewedMonthDay) {
+    const wanted = /* @__PURE__ */ new Set([previousMonthDay(viewedMonthDay)]);
+    for (let i = -KEEP_BEHIND; i <= KEEP_AHEAD; i++) wanted.add(offsetMonthDay(i));
+    wanted.delete(viewedMonthDay);
     await Promise.all(
-      offsets.map((o) => {
-        const d = new Date(today);
-        d.setDate(d.getDate() + o);
-        const md = monthDayFor(d);
-        return (async () => {
-          try {
-            if (readCache(cacheKey(md))) return;
-            const response = await fetch(`${"https://uwaazy.github.io/on-this-day/catalog"}/${md}.json`, {
-              cache: "no-cache"
-            });
-            if (!response.ok) return;
-            const value = await response.json();
-            if (isValidCatalog(value, md)) {
-              writeCache(cacheKey(md), value);
-            }
-          } catch {
-          }
-        })();
+      [...wanted].map(async (monthDay) => {
+        try {
+          if (readCache(cacheKey(monthDay))) return;
+          writeCache(monthDay, await fetchDay(monthDay));
+        } catch {
+        }
       })
     );
   }
@@ -128,30 +165,142 @@
     const cached = readCache(cacheKey(monthDay));
     if (cached) {
       pruneCache(monthDay);
-      void prefetchNearbyDays();
+      void prefetchNearbyDays(monthDay);
       if (!cached.cachedAt || Date.now() - cached.cachedAt > REVALIDATE_AFTER_MS) {
-        void fetch(`${"https://uwaazy.github.io/on-this-day/catalog"}/${monthDay}.json`, { cache: "no-cache" }).then((response2) => response2.ok ? response2.json() : null).then((fresh) => {
-          if (fresh && isValidCatalog(fresh, monthDay)) writeCache(cacheKey(monthDay), fresh);
-        }).catch(() => {
+        void fetchDay(monthDay).then((fresh) => writeCache(monthDay, fresh)).catch(() => {
         });
       }
       return cached;
     }
-    const response = await fetch(`${"https://uwaazy.github.io/on-this-day/catalog"}/${monthDay}.json`, {
-      method: "GET",
-      cache: "no-cache"
-    });
-    if (!response.ok) {
-      throw new Error(`CatÃ¡logo indisponÃ­vel (${response.status}).`);
-    }
-    const value = await response.json();
-    if (!isValidCatalog(value, monthDay)) {
-      throw new Error("O catÃ¡logo publicado tem um formato invÃ¡lido.");
-    }
-    const catalog = value;
-    writeCache(cacheKey(monthDay), catalog);
+    const catalog = await fetchDay(monthDay);
     pruneCache(monthDay);
-    void prefetchNearbyDays();
+    writeCache(monthDay, catalog);
+    void prefetchNearbyDays(monthDay);
+    return catalog;
+  }
+
+  // src/api/birthdays.ts
+  var BirthdaysUnavailableError = class extends Error {
+    constructor(status) {
+      super(`Aniversários indisponíveis (${status}).`);
+      this.name = "BirthdaysUnavailableError";
+      this.status = status;
+    }
+  };
+  var CACHE_PREFIX2 = "on-this-day:birthdays:v1:";
+  var EXPECTED_SCHEMA_VERSION2 = 1;
+  var REVALIDATE_AFTER_MS2 = 7 * 24 * 60 * 60 * 1e3;
+  var KEEP_BEHIND2 = 1;
+  var KEEP_AHEAD2 = 1;
+  var MISSING_RETRY_MS = 5 * 60 * 1e3;
+  var missingUntil = /* @__PURE__ */ new Map();
+  var inflight2 = /* @__PURE__ */ new Map();
+  function monthDayFor2(date) {
+    return `${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
+  }
+  function offsetMonthDay2(offsetDays) {
+    const d = /* @__PURE__ */ new Date();
+    d.setDate(d.getDate() + offsetDays);
+    return monthDayFor2(d);
+  }
+  function cacheKey2(monthDay) {
+    return `${CACHE_PREFIX2}${monthDay}`;
+  }
+  function isValidBirthdays(value, monthDay) {
+    return typeof value === "object" && value !== null && "schemaVersion" in value && value.schemaVersion === EXPECTED_SCHEMA_VERSION2 && "monthDay" in value && value.monthDay === monthDay && "items" in value && Array.isArray(value.items);
+  }
+  function readCache2(monthDay) {
+    try {
+      const raw = localStorage.getItem(cacheKey2(monthDay));
+      if (!raw) return null;
+      const parsed = JSON.parse(raw);
+      return isValidBirthdays(parsed, monthDay) ? parsed : null;
+    } catch {
+      return null;
+    }
+  }
+  function removeBirthdayKeys(except) {
+    try {
+      for (let i = 0; i < localStorage.length; ) {
+        const key = localStorage.key(i);
+        if (key && key.startsWith(CACHE_PREFIX2) && !except(key.slice(CACHE_PREFIX2.length))) localStorage.removeItem(key);
+        else i += 1;
+      }
+    } catch {
+    }
+  }
+  function writeCache2(monthDay, value) {
+    const payload = JSON.stringify({ ...value, cachedAt: Date.now() });
+    try {
+      localStorage.setItem(cacheKey2(monthDay), payload);
+      return;
+    } catch {
+    }
+    removeBirthdayKeys((day) => day === monthDay);
+    try {
+      localStorage.setItem(cacheKey2(monthDay), payload);
+    } catch {
+    }
+  }
+  function pruneCache2(viewedMonthDay) {
+    const keep = /* @__PURE__ */ new Set([viewedMonthDay]);
+    for (let i = -KEEP_BEHIND2; i <= KEEP_AHEAD2; i += 1) keep.add(offsetMonthDay2(i));
+    removeBirthdayKeys((day) => keep.has(day));
+  }
+  function fetchDay2(monthDay) {
+    const existing = inflight2.get(monthDay);
+    if (existing) return existing;
+    const pending = (async () => {
+      const retryAt = missingUntil.get(monthDay);
+      if (retryAt && Date.now() < retryAt) throw new BirthdaysUnavailableError(404);
+      let response;
+      try {
+        response = await fetch(`${"https://uwaazy.github.io/on-this-day/catalog"}/birthdays/${monthDay}.json`, { method: "GET", cache: "no-cache" });
+      } catch (error) {
+        throw new Error(`Sem conexão com o servidor do catálogo (${error instanceof Error ? error.message : String(error)}).`);
+      }
+      if (response.status === 404) {
+        missingUntil.set(monthDay, Date.now() + MISSING_RETRY_MS);
+        throw new BirthdaysUnavailableError(404);
+      }
+      if (!response.ok) throw new Error(`Aniversários indisponíveis (${response.status}).`);
+      let value;
+      try {
+        value = await response.json();
+      } catch {
+        throw new Error("Os aniversários publicados têm um formato inválido.");
+      }
+      if (!isValidBirthdays(value, monthDay)) throw new Error("Os aniversários publicados têm um formato inválido.");
+      missingUntil.delete(monthDay);
+      return value;
+    })().finally(() => inflight2.delete(monthDay));
+    inflight2.set(monthDay, pending);
+    return pending;
+  }
+  function prefetchNeighbours(viewedMonthDay) {
+    for (const offset of [-KEEP_BEHIND2, KEEP_AHEAD2]) {
+      const monthDay = offsetMonthDay2(offset);
+      if (monthDay === viewedMonthDay || readCache2(monthDay)) continue;
+      void fetchDay2(monthDay).then((value) => writeCache2(monthDay, value)).catch(() => {
+      });
+    }
+  }
+  async function loadBirthdays(monthDay, force = false) {
+    if (force) missingUntil.delete(monthDay);
+    const cached = readCache2(monthDay);
+    if (cached) {
+      pruneCache2(monthDay);
+      prefetchNeighbours(monthDay);
+      if (!cached.cachedAt || Date.now() - cached.cachedAt > REVALIDATE_AFTER_MS2) {
+        void fetchDay2(monthDay).then((fresh) => writeCache2(monthDay, fresh)).catch(() => {
+        });
+      }
+      return cached;
+    }
+    const catalog = await fetchDay2(monthDay);
+    pruneCache2(monthDay);
+    writeCache2(monthDay, catalog);
+    prefetchNeighbours(monthDay);
     return catalog;
   }
 
@@ -208,8 +357,8 @@
   }
 
   // src/services/spotify-album.ts
-  var CACHE_PREFIX2 = "on-this-day:spotify-album:v3:";
-  var LEGACY_CACHE_PREFIXES = ["on-this-day:spotify-album:v1:", "on-this-day:spotify-album:v2:"];
+  var CACHE_PREFIX3 = "on-this-day:spotify-album:v4:";
+  var LEGACY_CACHE_PREFIXES = ["on-this-day:spotify-album:v1:", "on-this-day:spotify-album:v2:", "on-this-day:spotify-album:v3:"];
   var CACHE_TTL = 14 * 24 * 60 * 60 * 1e3;
   var CACHE_MISS_TTL = 24 * 60 * 60 * 1e3;
   var MAX_CACHE_ENTRIES = 400;
@@ -229,10 +378,10 @@
     let active = 0;
     const queue = [];
     return function limit(task) {
-      return new Promise((resolve3, reject) => {
+      return new Promise((resolve4, reject) => {
         const start = () => {
           active += 1;
-          task().then(resolve3, reject).finally(() => {
+          task().then(resolve4, reject).finally(() => {
             active -= 1;
             queue.shift()?.();
           });
@@ -243,12 +392,12 @@
     };
   }
   function withTimeout(promise, ms) {
-    return new Promise((resolve3, reject) => {
+    return new Promise((resolve4, reject) => {
       const timer = window.setTimeout(() => reject(new Error("timeout")), ms);
       promise.then(
         (value) => {
           window.clearTimeout(timer);
-          resolve3(value);
+          resolve4(value);
         },
         (error) => {
           window.clearTimeout(timer);
@@ -288,12 +437,16 @@
     const pool = exact.length ? exact : candidates;
     const yearOf = (album) => Number(album.release_date?.slice(0, 4));
     const sameYear = pool.filter((album) => yearOf(album) === releaseYear);
+    const nearYear = pool.filter((album) => Math.abs(yearOf(album) - releaseYear) <= 1);
+    const preferAlbum = (list) => list.find((album) => album.album_type === "album") ?? list[0];
     let selected = null;
     if (sameYear.length) {
-      selected = sameYear.find((album) => album.album_type === "album") ?? sameYear[0];
-    } else if (pool.length === 1) {
-      const year = yearOf(pool[0]);
-      if (!Number.isFinite(year) || year >= releaseYear) selected = pool[0];
+      selected = preferAlbum(sameYear);
+    } else if (nearYear.length) {
+      selected = preferAlbum(nearYear);
+    } else {
+      const later = pool.filter((album) => !Number.isFinite(yearOf(album)) || yearOf(album) >= releaseYear).sort((a, b) => (yearOf(a) || Infinity) - (yearOf(b) || Infinity));
+      if (later.length && (exact.length || later.length === 1)) selected = preferAlbum(later.filter((album) => yearOf(album) === yearOf(later[0])));
     }
     return { selected, coverCandidate: selected ?? pool[0] };
   }
@@ -355,9 +508,9 @@
     } catch {
     }
   }
-  function readCache2(mbid) {
+  function readCache3(mbid) {
     try {
-      const key = `${CACHE_PREFIX2}${mbid}`;
+      const key = `${CACHE_PREFIX3}${mbid}`;
       const raw = localStorage.getItem(key);
       if (!raw) return null;
       const entry = JSON.parse(raw);
@@ -375,22 +528,22 @@
     }
   }
   function peekCachedCover(mbid) {
-    const cached = readCache2(mbid);
+    const cached = readCache3(mbid);
     return cached?.cover ?? null;
   }
   var writesSincePrune = 0;
-  function writeCache2(mbid, result) {
+  function writeCache3(mbid, result) {
     try {
       const ttl = result.uri || result.cover ? CACHE_TTL : CACHE_MISS_TTL;
       const entry = { ...result, expiresAt: Date.now() + ttl };
-      localStorage.setItem(`${CACHE_PREFIX2}${mbid}`, JSON.stringify(entry));
+      localStorage.setItem(`${CACHE_PREFIX3}${mbid}`, JSON.stringify(entry));
       writesSincePrune += 1;
       if (writesSincePrune < 25) return;
       writesSincePrune = 0;
       const entries = [];
       for (let i = 0; i < localStorage.length; i += 1) {
         const key = localStorage.key(i);
-        if (!key?.startsWith(CACHE_PREFIX2)) continue;
+        if (!key?.startsWith(CACHE_PREFIX3)) continue;
         try {
           const value = JSON.parse(localStorage.getItem(key) ?? "");
           entries.push({ key, expiresAt: typeof value.expiresAt === "number" ? value.expiresAt : 0 });
@@ -475,14 +628,14 @@
     purgeLegacyCache();
     const existing = memory.get(query.mbid);
     if (existing) return existing;
-    const cached = readCache2(query.mbid);
+    const cached = readCache3(query.mbid);
     if (cached) {
       const resolved = Promise.resolve(cached);
       memory.set(query.mbid, resolved);
       return resolved;
     }
     const pending = lookupAlbum(query).then((found) => {
-      writeCache2(query.mbid, found);
+      writeCache3(query.mbid, found);
       return found;
     }).catch(() => {
       memory.delete(query.mbid);
@@ -514,7 +667,7 @@
     }
     return false;
   }
-  async function openAlbumInSpotify(query, waitMs = 3500) {
+  async function openAlbumInSpotify(query, waitMs = 9e3) {
     let match = null;
     try {
       match = await withTimeout(findSpotifyAlbum(query), waitMs);
@@ -533,7 +686,7 @@
   function normalizeArtistName(name) {
     return normalizeText(name);
   }
-  function readCache3() {
+  function readCache4() {
     try {
       const parsed = JSON.parse(localStorage.getItem(CACHE_KEY) ?? "null");
       if (parsed && Array.isArray(parsed.names) && typeof parsed.at === "number") return parsed;
@@ -541,14 +694,14 @@
     }
     return null;
   }
-  function writeCache3(names) {
+  function writeCache4(names) {
     try {
       localStorage.setItem(CACHE_KEY, JSON.stringify({ names, at: Date.now() }));
     } catch {
     }
   }
   function peekFollowedArtists() {
-    const cached = readCache3();
+    const cached = readCache4();
     return cached?.names.length ? cached.names : null;
   }
   async function fromWebApi() {
@@ -578,7 +731,7 @@
     return names;
   }
   async function loadFollowedArtists(force = false) {
-    const cached = readCache3();
+    const cached = readCache4();
     if (!force && cached && Date.now() - cached.at < CACHE_FRESH_MS) {
       return { names: cached.names, fromCache: true, stale: false };
     }
@@ -595,7 +748,7 @@
     }
     if (names?.length) {
       const unique = [...new Set(names)];
-      writeCache3(unique);
+      writeCache4(unique);
       return { names: unique, fromCache: false, stale: false };
     }
     if (cached) return { names: cached.names, fromCache: true, stale: true };
@@ -694,6 +847,33 @@
       loadingFollowed: "Loading your followed artists list…",
       changeLanguage: "Change language",
       albumsThisDay: "{count} albums this day",
+      previousDay: "Previous day",
+      previousDayTitle: "Go back one day",
+      nextDay: "Next day",
+      nextDayTitle: "Go forward one day",
+      backToToday: "Back to today",
+      backToTodayTitle: "Jump back to today",
+      previousDayLimit: "You can go back up to {days} days",
+      tabsLabel: "Content",
+      tabAlbums: "Albums",
+      tabArtists: "Artists",
+      subtitleBirthdays: "Artists born on {date}, in other years.",
+      birthdaysThisDay: "{count} artists born this day",
+      loadingBirthdays: "Loading birthdays for {date}…",
+      birthdaysMissing: "The artist birthdays for this day haven't been published yet. They are generated together with the catalog; try again later.",
+      birthdaysError: "Could not load the artist birthdays for {date}.",
+      birthdaysEmpty: "No artist birthdays found for this day.",
+      birthdaysEmptyNoMatch: "No birthday artists match the selected genres.",
+      birthdaysFollowedEmpty: "None of this day's birthday artists are artists you follow. Turn the filter off to see all.",
+      retry: "Try again",
+      moreArtists: "View more artists",
+      lessArtists: "Show fewer",
+      bornOn: "Born: {date}",
+      ageOne: "1 year old",
+      ageMany: "{age} years old",
+      openArtistOnSpotify: "Open {name} on Spotify",
+      artistPhotoAlt: "Photo of {name}",
+      attributionBirthdays: "Data: MusicBrainz. Photos and profiles: Spotify. Click a photo to open the artist on Spotify.",
       albumAriaLabel: "Search {title} by {artist} on Spotify",
       albumTitleAttr: "Search {title} on Spotify",
       coverAlt: "Cover of {title}",
@@ -780,7 +960,39 @@
       coverPreviewTitle: "Visualização da capa de {title}",
       loadingFollowed: "Carregando a lista de artistas que você segue…",
       changeLanguage: "Mudar idioma",
-      albumsThisDay: "{count} álbuns neste dia"
+      albumsThisDay: "{count} álbuns neste dia",
+      previousDay: "Dia anterior",
+      previousDayTitle: "Voltar um dia",
+      nextDay: "Próximo dia",
+      nextDayTitle: "Avançar um dia",
+      backToToday: "Voltar para hoje",
+      backToTodayTitle: "Voltar direto para hoje",
+      previousDayLimit: "Você pode voltar até {days} dias",
+      tabsLabel: "Conteúdo",
+      tabAlbums: "Álbuns",
+      tabArtists: "Artistas",
+      subtitleBirthdays: "Artistas nascidos em {date}, em outros anos.",
+      birthdaysThisDay: "{count} artistas nascidos neste dia",
+      loadingBirthdays: "Carregando os aniversários de {date}…",
+      birthdaysMissing: "Os aniversários de artistas deste dia ainda não foram publicados. Eles são gerados junto com o catálogo; tente de novo mais tarde.",
+      birthdaysError: "Não foi possível carregar os aniversários de artistas de {date}.",
+      birthdaysEmpty: "Nenhum aniversário de artista encontrado para este dia.",
+      birthdaysEmptyNoMatch: "Nenhum aniversariante corresponde aos gêneros selecionados.",
+      birthdaysFollowedEmpty: "Nenhum aniversariante deste dia é um artista que você segue. Desative o filtro para ver todos.",
+      retry: "Tentar de novo",
+      moreArtists: "Ver mais artistas",
+      lessArtists: "Mostrar menos",
+      bornOn: "Nascimento: {date}",
+      ageOne: "1 ano",
+      ageMany: "{age} anos",
+      openArtistOnSpotify: "Abrir {name} no Spotify",
+      artistPhotoAlt: "Foto de {name}",
+      attributionBirthdays: "Dados: MusicBrainz. Fotos e perfis: Spotify. Clique na foto para abrir o artista no Spotify.",
+      albumAriaLabel: "Pesquisar {title} de {artist} no Spotify",
+      albumTitleAttr: "Pesquisar {title} no Spotify",
+      coverAlt: "Capa de {title}",
+      searchOnSpotify: "Pesquisar {title} no Spotify",
+      searchOnSpotifyShort: "Spotify"
     },
     es: {
       eyebrow: "HISTORIA DE LA MÚSICA",
@@ -863,6 +1075,33 @@
       loadingFollowed: "Cargando tu lista de artistas seguidos…",
       changeLanguage: "Cambiar idioma",
       albumsThisDay: "{count} álbumes este día",
+      previousDay: "Día anterior",
+      previousDayTitle: "Retroceder un día",
+      nextDay: "Día siguiente",
+      nextDayTitle: "Avanzar un día",
+      backToToday: "Volver a hoy",
+      backToTodayTitle: "Volver directamente a hoy",
+      previousDayLimit: "Puedes retroceder hasta {days} días",
+      tabsLabel: "Contenido",
+      tabAlbums: "Álbumes",
+      tabArtists: "Artistas",
+      subtitleBirthdays: "Artistas nacidos el {date}, en otros años.",
+      birthdaysThisDay: "{count} artistas nacidos este día",
+      loadingBirthdays: "Cargando los cumpleaños de {date}…",
+      birthdaysMissing: "Los cumpleaños de artistas de este día aún no se han publicado. Se generan junto con el catálogo; inténtalo de nuevo más tarde.",
+      birthdaysError: "No se pudieron cargar los cumpleaños de artistas de {date}.",
+      birthdaysEmpty: "No se encontraron cumpleaños de artistas para este día.",
+      birthdaysEmptyNoMatch: "Ningún cumpleañero coincide con los géneros seleccionados.",
+      birthdaysFollowedEmpty: "Ningún cumpleañero de este día es un artista que sigues. Desactiva el filtro para ver todos.",
+      retry: "Intentar de nuevo",
+      moreArtists: "Ver más artistas",
+      lessArtists: "Mostrar menos",
+      bornOn: "Nacimiento: {date}",
+      ageOne: "1 año",
+      ageMany: "{age} años",
+      openArtistOnSpotify: "Abrir {name} en Spotify",
+      artistPhotoAlt: "Foto de {name}",
+      attributionBirthdays: "Datos: MusicBrainz. Fotos y perfiles: Spotify. Haz clic en la foto para abrir al artista en Spotify.",
       albumAriaLabel: "Buscar {title} de {artist} en Spotify",
       albumTitleAttr: "Buscar {title} en Spotify",
       coverAlt: "Portada de {title}",
@@ -960,7 +1199,7 @@
   }
 
   // src/services/updates.ts
-  var APP_VERSION = true ? "1.1.3" : "0.0.0";
+  var APP_VERSION = true ? "1.1.4" : "0.0.0";
   var REPO = true ? "uWaazy/on-this-day" : "uWaazy/on-this-day";
   var REPO_URL = `https://github.com/${REPO}`;
   var RAW_BASE = `https://raw.githubusercontent.com/${REPO}/main`;
@@ -978,7 +1217,7 @@
     }
     return 0;
   }
-  function readCache4() {
+  function readCache5() {
     try {
       const parsed = JSON.parse(localStorage.getItem(CACHE_KEY2) ?? "null");
       if (parsed && typeof parsed.latest === "string" && typeof parsed.at === "number") return parsed;
@@ -990,7 +1229,7 @@
     return { latest, hasUpdate: !!latest && compareVersions(latest, APP_VERSION) > 0, checkedAt };
   }
   async function checkForUpdate(force = false) {
-    const cached = readCache4();
+    const cached = readCache5();
     if (!force && cached && Date.now() - cached.at < CHECK_INTERVAL_MS) return toInfo(cached.latest, cached.at);
     try {
       const response = await withTimeout(fetch(`${RAW_MANIFEST_URL}?t=${Math.floor(Date.now() / 6e4)}`, { cache: "no-store" }), 8e3);
@@ -1008,7 +1247,7 @@
     }
   }
   function peekUpdate() {
-    const cached = readCache4();
+    const cached = readCache5();
     return toInfo(cached?.latest ?? null, cached?.at ?? 0);
   }
   async function copyText(text) {
@@ -1123,7 +1362,7 @@
   var MAX_ENTRIES = 300;
   var store = null;
   var persistTimer;
-  var inflight = /* @__PURE__ */ new Map();
+  var inflight3 = /* @__PURE__ */ new Map();
   function loadStore() {
     if (store) return store;
     store = {};
@@ -1226,6 +1465,8 @@
     return page.thumbnail.source.replace(/\/\d+px-/, "/800px-");
   }
   async function resolve(candidate) {
+    if (!candidate.album) return null;
+    const candidateAlbum = candidate.album;
     const key = `artist:${candidate.key}`;
     const cached = readEntry(key);
     if (cached) return cached.url ? { url: cached.url, kind: "artist", source: cached.source ?? "spotify", spotifyArtistId: cached.id } : null;
@@ -1242,7 +1483,7 @@
         return null;
       }
     };
-    const album = await findSpotifyAlbum(candidate.album);
+    const album = await findSpotifyAlbum(candidateAlbum);
     const owner = album.artists.find((artist) => normalizeText(artist.name) === candidate.key);
     if (owner) {
       const url = await attempt(() => artistImageById(owner.id));
@@ -1258,10 +1499,10 @@
     return null;
   }
   function resolveArtistPhoto(candidate) {
-    const existing = inflight.get(candidate.key);
+    const existing = inflight3.get(candidate.key);
     if (existing) return existing;
-    const pending = resolve(candidate).finally(() => inflight.delete(candidate.key));
-    inflight.set(candidate.key, pending);
+    const pending = resolve(candidate).finally(() => inflight3.delete(candidate.key));
+    inflight3.set(candidate.key, pending);
     return pending;
   }
   var loadedImages = /* @__PURE__ */ new Set();
@@ -1594,6 +1835,277 @@
     )), /* @__PURE__ */ Spicetify.React.createElement("div", { className: "otd-album-name", title: item.title }, item.title), /* @__PURE__ */ Spicetify.React.createElement("div", { className: "otd-artist-name", title: item.artistName }, item.artistName), /* @__PURE__ */ Spicetify.React.createElement("div", { className: "otd-card-meta" }, year), /* @__PURE__ */ Spicetify.React.createElement("div", { className: `otd-scores${SHOW_CRITIC_SCORE ? "" : " otd-scores--single"}` }, /* @__PURE__ */ Spicetify.React.createElement(ScoreMeter, { kind: "user", reading: userScore, lang }), SHOW_CRITIC_SCORE && /* @__PURE__ */ Spicetify.React.createElement(ScoreMeter, { kind: "critic", reading: criticScore, lang })));
   });
 
+  // src/services/birthday-profile.ts
+  var STORAGE_KEY2 = "on-this-day:birthday-profiles:v1";
+  var HIT_TTL2 = 30 * 24 * 60 * 60 * 1e3;
+  var MISS_TTL2 = 6 * 60 * 60 * 1e3;
+  var MAX_ENTRIES2 = 600;
+  var SPOTIFY_ID = /^[A-Za-z0-9]{22}$/;
+  var MIN_AMBIGUOUS_POPULARITY = 20;
+  var store2 = null;
+  var persistTimer2;
+  var inflight4 = /* @__PURE__ */ new Map();
+  function loadStore2() {
+    if (store2) return store2;
+    store2 = {};
+    try {
+      const parsed = JSON.parse(localStorage.getItem(STORAGE_KEY2) ?? "null");
+      if (parsed && typeof parsed === "object") store2 = parsed;
+    } catch {
+    }
+    return store2;
+  }
+  function persistSoon2() {
+    if (persistTimer2 !== void 0) return;
+    persistTimer2 = window.setTimeout(() => {
+      persistTimer2 = void 0;
+      const current = loadStore2();
+      const keys = Object.keys(current);
+      if (keys.length > MAX_ENTRIES2) {
+        keys.sort((a, b) => current[a].at - current[b].at);
+        for (const key of keys.slice(0, keys.length - MAX_ENTRIES2)) delete current[key];
+      }
+      try {
+        localStorage.setItem(STORAGE_KEY2, JSON.stringify(current));
+      } catch {
+      }
+    }, 1500);
+  }
+  function readEntry2(mbid) {
+    const entry = loadStore2()[mbid];
+    if (!entry || typeof entry.at !== "number") return null;
+    const ttl = entry.id || entry.url ? HIT_TTL2 : MISS_TTL2;
+    if (Date.now() - entry.at > ttl) {
+      delete loadStore2()[mbid];
+      return null;
+    }
+    return entry;
+  }
+  function writeEntry2(mbid, profile) {
+    loadStore2()[mbid] = { id: profile.spotifyId, url: profile.photoUrl, at: Date.now() };
+    persistSoon2();
+  }
+  function toProfile(entry) {
+    return {
+      spotifyId: entry.id && SPOTIFY_ID.test(entry.id) ? entry.id : null,
+      photoUrl: typeof entry.url === "string" ? entry.url : null
+    };
+  }
+  function peekBirthdayProfile(artist) {
+    const entry = readEntry2(artist.mbid);
+    if (entry) return toProfile(entry);
+    if (artist.spotifyId && SPOTIFY_ID.test(artist.spotifyId)) return { spotifyId: artist.spotifyId, photoUrl: null };
+    return null;
+  }
+  function pickAvatar(images) {
+    const valid = (images ?? []).filter((image) => image.url);
+    if (!valid.length) return null;
+    const sorted = [...valid].sort((a, b) => (a.width ?? 0) - (b.width ?? 0));
+    return (sorted.find((image) => (image.width ?? 0) >= 200) ?? sorted[sorted.length - 1]).url ?? null;
+  }
+  function genreWords(genre) {
+    return genre.toLocaleLowerCase("en").split(/[^\p{L}\p{N}]+/u).filter((word) => word.length > 1);
+  }
+  async function searchSpotifyArtist(artist) {
+    const params = new URLSearchParams({ q: artist.name, type: "artist", limit: "10" });
+    const result = await spotifyGet(
+      `https://api.spotify.com/v1/search?${params}`
+    );
+    const expected = normalizeText(artist.name);
+    const exact = (result.artists?.items ?? []).filter(
+      (hit) => !!hit.id && SPOTIFY_ID.test(hit.id) && !!hit.name && normalizeText(hit.name) === expected
+    );
+    if (!exact.length) return null;
+    const wanted = new Set((artist.genres ?? []).flatMap(genreWords));
+    const overlaps = (hit) => (hit.genres ?? []).some((genre) => genreWords(genre).some((word) => wanted.has(word)));
+    const ranked = [...exact].sort(
+      (a, b) => Number(overlaps(b)) - Number(overlaps(a)) || (b.popularity ?? 0) - (a.popularity ?? 0)
+    );
+    const best = ranked[0];
+    const accepted = exact.length === 1 || overlaps(best) || (best.popularity ?? 0) >= MIN_AMBIGUOUS_POPULARITY;
+    return accepted ? { id: best.id, url: pickAvatar(best.images) } : null;
+  }
+  async function resolve3(artist) {
+    const cached = readEntry2(artist.mbid);
+    if (cached) return toProfile(cached);
+    let transientFailure = false;
+    const attempt = async (task) => {
+      try {
+        return await task();
+      } catch {
+        transientFailure = true;
+        return null;
+      }
+    };
+    let id = artist.spotifyId && SPOTIFY_ID.test(artist.spotifyId) ? artist.spotifyId : null;
+    let url = null;
+    if (id) {
+      const knownId = id;
+      url = await attempt(() => artistImageById(knownId)) ?? await attempt(() => viaGraphQL(knownId));
+    } else {
+      const hit = await attempt(() => searchSpotifyArtist(artist));
+      if (hit) {
+        id = hit.id;
+        url = hit.url ?? await attempt(() => artistImageById(hit.id));
+      }
+    }
+    if (!url) url = await attempt(() => viaWikipedia(artist.name));
+    const profile = { spotifyId: id, photoUrl: url };
+    if (id || url || !transientFailure) writeEntry2(artist.mbid, profile);
+    return profile;
+  }
+  function resolveBirthdayProfile(artist) {
+    const existing = inflight4.get(artist.mbid);
+    if (existing) return existing;
+    const pending = resolve3(artist).finally(() => inflight4.delete(artist.mbid));
+    inflight4.set(artist.mbid, pending);
+    return pending;
+  }
+  async function openArtistInSpotify(artist, waitMs = 3500) {
+    let id = peekBirthdayProfile(artist)?.spotifyId ?? null;
+    if (!id) {
+      try {
+        id = (await withTimeout(resolveBirthdayProfile(artist), waitMs)).spotifyId;
+      } catch {
+      }
+    }
+    navigateInSpotify(id ? `/artist/${id}` : `/search/${encodeURIComponent(artist.name)}/artists`);
+    return id ? "artist" : "search";
+  }
+
+  // src/components/BirthdayCard.tsx
+  function parseBorn(born) {
+    const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(born);
+    return match ? new Date(Number(match[1]), Number(match[2]) - 1, Number(match[3])) : null;
+  }
+  function countryName(code, lang) {
+    if (!code) return null;
+    try {
+      const names = new Intl.DisplayNames([lang], { type: "region" });
+      return names.of(code) ?? code;
+    } catch {
+      return code;
+    }
+  }
+  function titleCase(value) {
+    return value.replace(/(^|[\s-])(\p{L})/gu, (_match, lead, letter) => `${lead}${letter.toLocaleUpperCase()}`);
+  }
+  function initialsOf(name) {
+    const words = name.split(/\s+/).filter(Boolean);
+    const letters = (words.length > 1 ? [words[0], words[words.length - 1]] : words).map((word) => Array.from(word)[0] ?? "");
+    return letters.join("").toLocaleUpperCase();
+  }
+  function hueOf(value) {
+    let hash = 0;
+    for (let i = 0; i < value.length; i += 1) hash = (hash * 31 + value.charCodeAt(i)) % 360;
+    return hash;
+  }
+  var BirthdayCard = memo(function BirthdayCard2({ artist, lang, viewYear }) {
+    const [photo, setPhoto] = useState(() => peekBirthdayProfile(artist)?.photoUrl ?? null);
+    const [photoFailed, setPhotoFailed] = useState(false);
+    const wrapRef = useRef(null);
+    const mounted = useRef(true);
+    const bornDate = parseBorn(artist.born);
+    const age = viewYear - Number(artist.born.slice(0, 4));
+    const bornLabel = bornDate ? new Intl.DateTimeFormat(lang, { day: "numeric", month: "long", year: "numeric" }).format(bornDate) : artist.born;
+    const country = countryName(artist.country, lang);
+    const genres = (artist.genres ?? []).slice(0, 3);
+    useEffect(() => {
+      mounted.current = true;
+      if (photo) return () => {
+        mounted.current = false;
+      };
+      const load = () => {
+        void resolveBirthdayProfile(artist).then((profile) => {
+          if (mounted.current && profile.photoUrl) setPhoto(profile.photoUrl);
+        });
+      };
+      let observer;
+      const node = wrapRef.current;
+      if (node && typeof IntersectionObserver !== "undefined") {
+        observer = new IntersectionObserver((entries) => {
+          if (entries.some((entry) => entry.isIntersecting)) {
+            observer?.disconnect();
+            load();
+          }
+        });
+        observer.observe(node);
+      } else {
+        load();
+      }
+      return () => {
+        mounted.current = false;
+        observer?.disconnect();
+      };
+    }, [artist.mbid]);
+    const label = t(lang, "openArtistOnSpotify", { name: artist.name });
+    return /* @__PURE__ */ Spicetify.React.createElement("article", { className: "otd-artist-card" }, /* @__PURE__ */ Spicetify.React.createElement("div", { className: "otd-artist-photo-wrap", ref: wrapRef }, /* @__PURE__ */ Spicetify.React.createElement(
+      "button",
+      {
+        type: "button",
+        className: "otd-artist-photo",
+        onClick: () => {
+          void openArtistInSpotify(artist);
+        },
+        onMouseEnter: () => {
+          void resolveBirthdayProfile(artist);
+        },
+        "aria-label": label,
+        title: label
+      },
+      photo && !photoFailed ? /* @__PURE__ */ Spicetify.React.createElement(
+        "img",
+        {
+          src: photo,
+          alt: t(lang, "artistPhotoAlt", { name: artist.name }),
+          loading: "lazy",
+          decoding: "async",
+          onError: () => setPhotoFailed(true)
+        }
+      ) : /* @__PURE__ */ Spicetify.React.createElement(
+        "span",
+        {
+          className: "otd-artist-initials",
+          "aria-hidden": "true",
+          style: { background: `linear-gradient(145deg, hsl(${hueOf(artist.mbid)} 38% 34%), hsl(${(hueOf(artist.mbid) + 40) % 360} 38% 20%))` }
+        },
+        initialsOf(artist.name)
+      )
+    )), /* @__PURE__ */ Spicetify.React.createElement("h3", { className: "otd-artist-card-name", title: artist.name }, artist.name), /* @__PURE__ */ Spicetify.React.createElement("p", { className: "otd-artist-age" }, t(lang, age === 1 ? "ageOne" : "ageMany", { age })), /* @__PURE__ */ Spicetify.React.createElement("p", { className: "otd-artist-born" }, t(lang, "bornOn", { date: bornLabel })), country && /* @__PURE__ */ Spicetify.React.createElement("p", { className: "otd-artist-country" }, country), genres.length > 0 && /* @__PURE__ */ Spicetify.React.createElement("div", { className: "otd-artist-genres" }, genres.map((genre) => /* @__PURE__ */ Spicetify.React.createElement("span", { key: genre, className: "otd-artist-genre" }, titleCase(genre)))));
+  });
+
+  // src/components/BirthdaysView.tsx
+  var INITIAL_ARTISTS = 24;
+  var ARTISTS_PER_EXPANSION = 24;
+  function BirthdaysView({
+    lang,
+    status,
+    artists,
+    totalBeforeFilters,
+    hasGenreFilter,
+    onlyFollowedActive,
+    dateLabel,
+    viewYear,
+    errorMessage,
+    onRetry
+  }) {
+    const [visibleCount, setVisibleCount] = useState(INITIAL_ARTISTS);
+    if (status === "loading") {
+      return /* @__PURE__ */ Spicetify.React.createElement("p", { className: "otd-empty" }, t(lang, "loadingBirthdays", { date: dateLabel }));
+    }
+    if (status === "missing") {
+      return /* @__PURE__ */ Spicetify.React.createElement("div", { className: "otd-empty" }, /* @__PURE__ */ Spicetify.React.createElement("p", null, t(lang, "birthdaysMissing")), /* @__PURE__ */ Spicetify.React.createElement("button", { type: "button", className: "otd-retry-btn", onClick: onRetry }, t(lang, "retry")));
+    }
+    if (status === "error") {
+      return /* @__PURE__ */ Spicetify.React.createElement("div", { className: "otd-empty" }, /* @__PURE__ */ Spicetify.React.createElement("p", null, t(lang, "birthdaysError", { date: dateLabel })), errorMessage && /* @__PURE__ */ Spicetify.React.createElement("pre", { className: "otd-error" }, errorMessage), /* @__PURE__ */ Spicetify.React.createElement("button", { type: "button", className: "otd-retry-btn", onClick: onRetry }, t(lang, "retry")));
+    }
+    if (!artists.length) {
+      return /* @__PURE__ */ Spicetify.React.createElement("p", { className: "otd-empty" }, totalBeforeFilters === 0 ? t(lang, "birthdaysEmpty") : hasGenreFilter ? t(lang, "birthdaysEmptyNoMatch") : onlyFollowedActive ? t(lang, "birthdaysFollowedEmpty") : t(lang, "birthdaysEmpty"));
+    }
+    const visible = artists.slice(0, visibleCount);
+    return /* @__PURE__ */ Spicetify.React.createElement("section", { className: "otd-birthdays", "aria-label": t(lang, "tabArtists") }, /* @__PURE__ */ Spicetify.React.createElement("div", { className: "otd-artist-grid" }, visible.map((artist) => /* @__PURE__ */ Spicetify.React.createElement(BirthdayCard, { key: artist.mbid, artist, lang, viewYear }))), /* @__PURE__ */ Spicetify.React.createElement("div", { className: "otd-year-actions" }, visibleCount < artists.length && /* @__PURE__ */ Spicetify.React.createElement("button", { className: "otd-year-more", onClick: () => setVisibleCount((count) => Math.min(count + ARTISTS_PER_EXPANSION, artists.length)) }, t(lang, "moreArtists")), visibleCount > INITIAL_ARTISTS && /* @__PURE__ */ Spicetify.React.createElement("button", { className: "otd-year-less", onClick: () => setVisibleCount(INITIAL_ARTISTS) }, t(lang, "lessArtists"))));
+  }
+
   // src/services/background-selection.ts
   var VISIBLE_ARTISTS = 6;
   var POOL_SIZE = 18;
@@ -1638,6 +2150,15 @@
       result.push(candidate);
     }
     return result;
+  }
+  function selectBirthdayBackgroundCandidates(artists, limit = POOL_SIZE) {
+    return artists.slice(0, limit).map((artist) => ({
+      key: `birthday:${artist.mbid}`,
+      artistName: artist.name,
+      albums: [],
+      year: Number(artist.born.slice(0, 4)),
+      photo: () => resolveBirthdayProfile(artist).then((profile) => profile.photoUrl)
+    }));
   }
 
   // src/components/DynamicBackground.tsx
@@ -1720,7 +2241,7 @@
       const candidate = list[index];
       const visuals = [];
       try {
-        const photoTask = resolveArtistPhoto(candidate).then(async (photo2) => photo2 && await preloadImage(photo2.url) ? photo2.url : null).catch(() => null);
+        const photoTask = (candidate.photo ? candidate.photo().then(async (url) => url && await preloadImage(url) ? url : null) : resolveArtistPhoto(candidate).then(async (photo2) => photo2 && await preloadImage(photo2.url) ? photo2.url : null)).catch(() => null);
         const coverTasks = candidate.albums.map((album) => resolveAlbumCover(album).catch(() => null));
         const [photo, ...covers] = await Promise.all([photoTask, ...coverTasks]);
         if (photo) visuals.push({ url: photo, kind: "artist" });
@@ -1879,8 +2400,12 @@
   var INITIAL_ALBUMS_PER_YEAR = 5;
   var ALBUMS_PER_EXPANSION = 5;
   var MAX_SELECTED_GENRES = 5;
+  var NO_ITEMS = [];
+  var NO_BIRTHDAYS = [];
   var FOLLOW_FILTER_KEY = "on-this-day:only-followed-artists";
   var YEAR_ORDER_KEY = "on-this-day:year-order";
+  var FOLLOW_FILTER_BIRTHDAYS_KEY = "on-this-day:only-followed-birthdays";
+  var MAX_DAYS_BACK = 7;
   function readOnlyFollowed() {
     try {
       const saved = localStorage.getItem(FOLLOW_FILTER_KEY);
@@ -1891,6 +2416,13 @@
       return saved === "true";
     } catch {
       return true;
+    }
+  }
+  function readOnlyFollowedBirthdays() {
+    try {
+      return localStorage.getItem(FOLLOW_FILTER_BIRTHDAYS_KEY) === "true";
+    } catch {
+      return false;
     }
   }
   function readYearOrder() {
@@ -1909,6 +2441,12 @@
     const match = /^(\d{4})-\d{2}-\d{2}$/.exec(date);
     return match ? Number(match[1]) : null;
   }
+  function ForwardIcon({ size = 14 }) {
+    return /* @__PURE__ */ Spicetify.React.createElement("svg", { viewBox: "0 0 24 24", width: size, height: size, fill: "none", stroke: "currentColor", strokeWidth: "2.2", strokeLinecap: "round", strokeLinejoin: "round", "aria-hidden": "true" }, /* @__PURE__ */ Spicetify.React.createElement("path", { d: "M5 12h14M13 6l6 6-6 6" }));
+  }
+  function BackIcon({ size = 14 }) {
+    return /* @__PURE__ */ Spicetify.React.createElement("svg", { viewBox: "0 0 24 24", width: size, height: size, fill: "none", stroke: "currentColor", strokeWidth: "2.2", strokeLinecap: "round", strokeLinejoin: "round", "aria-hidden": "true" }, /* @__PURE__ */ Spicetify.React.createElement("path", { d: "M19 12H5M11 6l-6 6 6 6" }));
+  }
   var AnniversarySection = memo(function AnniversarySection2({ year, items, currentYear, lang, sectionRef, onPreview }) {
     const [visibleCount, setVisibleCount] = useState(INITIAL_ALBUMS_PER_YEAR);
     const visibleItems = items.slice(0, visibleCount);
@@ -1925,12 +2463,19 @@
   });
   function OnThisDay() {
     const [lang, setLangState] = useState(getLang);
-    const [items, setItems] = useState([]);
-    const [state, setState] = useState("loading");
-    const [error, setError] = useState("");
+    const [catalog, setCatalog] = useState(null);
+    const [dayError, setDayError] = useState(null);
+    const [retryNonce, setRetryNonce] = useState(0);
     const [today, setToday] = useState(() => /* @__PURE__ */ new Date());
-    const [onlyFollowed, setOnlyFollowed] = useState(readOnlyFollowed);
-    const initialFollowed = useMemo(() => readOnlyFollowed() ? peekFollowedArtists() : null, []);
+    const [dayOffset, setDayOffset] = useState(0);
+    const [tab, setTab] = useState("albums");
+    const [birthdays, setBirthdays] = useState(null);
+    const [birthdaysError, setBirthdaysError] = useState(null);
+    const [birthdaysNonce, setBirthdaysNonce] = useState(0);
+    const [onlyFollowedAlbums, setOnlyFollowedAlbums] = useState(readOnlyFollowed);
+    const [onlyFollowedBirthdays, setOnlyFollowedBirthdays] = useState(readOnlyFollowedBirthdays);
+    const onlyFollowed = tab === "albums" ? onlyFollowedAlbums : onlyFollowedBirthdays;
+    const initialFollowed = useMemo(() => onlyFollowedAlbums || onlyFollowedBirthdays ? peekFollowedArtists() : null, []);
     const [followStatus, setFollowStatus] = useState(initialFollowed ? "ready" : "idle");
     const [followedSet, setFollowedSet] = useState(() => initialFollowed ? new Set(initialFollowed.map(normalizeArtistName)) : null);
     const [followedCount, setFollowedCount] = useState(initialFollowed?.length ?? 0);
@@ -1970,20 +2515,29 @@
       }
       return callback;
     };
-    const monthDay = getTodayKey(today);
-    const currentYear = today.getFullYear();
+    const viewDate = useMemo(
+      () => new Date(today.getFullYear(), today.getMonth(), today.getDate() - dayOffset),
+      [today, dayOffset]
+    );
+    const monthDay = getTodayKey(viewDate);
+    const currentYear = viewDate.getFullYear();
     const dateLabel = new Intl.DateTimeFormat(lang, {
       day: "numeric",
       month: "long",
       year: "numeric"
-    }).format(today);
+    }).format(viewDate);
+    const dateLabelShort = new Intl.DateTimeFormat(lang, { day: "numeric", month: "long" }).format(viewDate);
+    const items = catalog?.monthDay === monthDay ? catalog.items : NO_ITEMS;
+    const error = dayError?.monthDay === monthDay ? dayError.message : "";
+    const dayLoading = catalog?.monthDay !== monthDay && !error;
+    const state = catalog ? "ready" : error ? "error" : "loading";
     useEffect(() => {
       const nextMidnight = new Date(today.getFullYear(), today.getMonth(), today.getDate() + 1);
       const timeout = window.setTimeout(
         () => {
-          setItems([]);
-          setError("");
-          setState("loading");
+          setCatalog(null);
+          setDayError(null);
+          setDayOffset(0);
           setToday(/* @__PURE__ */ new Date());
         },
         Math.max(0, nextMidnight.getTime() - Date.now())
@@ -1992,21 +2546,43 @@
     }, [today]);
     useEffect(() => {
       let cancelled = false;
-      loadDailyCatalog(monthDay).then((catalog) => {
-        if (!cancelled) {
-          setItems(catalog.items);
-          setState("ready");
-        }
+      setDayError((current) => current?.monthDay === monthDay ? null : current);
+      loadDailyCatalog(monthDay).then((loaded) => {
+        if (!cancelled) setCatalog({ monthDay, items: loaded.items });
       }).catch((loadError) => {
-        if (!cancelled) {
-          setError(loadError instanceof Error ? loadError.message : String(loadError));
-          setState("error");
-        }
+        if (!cancelled) setDayError({ monthDay, message: loadError instanceof Error ? loadError.message : String(loadError) });
       });
       return () => {
         cancelled = true;
       };
-    }, [monthDay]);
+    }, [monthDay, retryNonce]);
+    useEffect(() => {
+      if (tab !== "artists") return;
+      let cancelled = false;
+      setBirthdaysError((current) => current?.monthDay === monthDay ? null : current);
+      loadBirthdays(monthDay, birthdaysNonce > 0).then((loaded) => {
+        if (!cancelled) setBirthdays({ monthDay, items: loaded.items });
+      }).catch((loadError) => {
+        if (cancelled) return;
+        setBirthdaysError({
+          monthDay,
+          message: loadError instanceof Error ? loadError.message : String(loadError),
+          missing: loadError instanceof BirthdaysUnavailableError
+        });
+      });
+      return () => {
+        cancelled = true;
+      };
+    }, [tab, monthDay, birthdaysNonce]);
+    function goToPreviousDay() {
+      setDayOffset((current) => Math.min(current + 1, MAX_DAYS_BACK));
+    }
+    function goToNextDay() {
+      setDayOffset((current) => Math.max(current - 1, 0));
+    }
+    function goToToday() {
+      setDayOffset(0);
+    }
     const openPreview = useCallback((item, cover) => setPreview({ item, cover }), []);
     function ensureFollowed(force = false) {
       const id = ++followRequest.current;
@@ -2020,15 +2596,20 @@
         if (id === followRequest.current) setFollowStatus("error");
       });
     }
+    const followRefreshed = useRef(false);
     useEffect(() => {
-      if (onlyFollowed) ensureFollowed();
-      return () => {
-        followRequest.current += 1;
-      };
+      if (!onlyFollowed) return;
+      if (followStatus === "idle" || !followRefreshed.current) {
+        followRefreshed.current = true;
+        ensureFollowed();
+      }
+    }, [tab, onlyFollowed]);
+    useEffect(() => () => {
+      followRequest.current += 1;
     }, []);
-    function persistFollowFilter(enabled) {
+    function persistFollowFilter(key, enabled) {
       try {
-        localStorage.setItem(FOLLOW_FILTER_KEY, String(enabled));
+        localStorage.setItem(key, String(enabled));
       } catch {
       }
     }
@@ -2038,8 +2619,13 @@
         return;
       }
       const next = !onlyFollowed;
-      setOnlyFollowed(next);
-      persistFollowFilter(next);
+      if (tab === "albums") {
+        setOnlyFollowedAlbums(next);
+        persistFollowFilter(FOLLOW_FILTER_KEY, next);
+      } else {
+        setOnlyFollowedBirthdays(next);
+        persistFollowFilter(FOLLOW_FILTER_BIRTHDAYS_KEY, next);
+      }
       if (next && followStatus !== "ready") ensureFollowed();
     }
     function toggleYearOrder() {
@@ -2103,9 +2689,28 @@
         return g ? g.label : id;
       });
     }, [selectedGenres]);
+    const birthdayItemsAll = birthdays?.monthDay === monthDay ? birthdays.items : NO_BIRTHDAYS;
+    const birthdaysErr = birthdaysError?.monthDay === monthDay ? birthdaysError : null;
+    const birthdaysStatus = birthdaysErr ? birthdaysErr.missing ? "missing" : "error" : birthdays?.monthDay === monthDay ? "ready" : "loading";
+    const displayedBirthdays = useMemo(() => {
+      let list = birthdayItemsAll;
+      if (onlyFollowed && followStatus !== "error") {
+        if (followStatus !== "ready" || !followedSet) return NO_BIRTHDAYS;
+        list = list.filter((artist) => artistIsFollowed(followedSet, [artist.name]));
+      }
+      if (selectedGenres.length) {
+        const selected = new Set(selectedGenres);
+        list = list.filter((artist) => classifyMainGenres(artist.genres).some((genre) => selected.has(genre)));
+      }
+      return list;
+    }, [birthdayItemsAll, onlyFollowed, followStatus, followedSet, selectedGenres]);
     const backgroundCandidates = useMemo(
       () => selectBackgroundCandidates(genreFilteredItems),
       [genreFilteredItems]
+    );
+    const birthdayBackgroundCandidates = useMemo(
+      () => selectBirthdayBackgroundCandidates(displayedBirthdays),
+      [displayedBirthdays]
     );
     useEffect(() => {
       try {
@@ -2269,21 +2874,21 @@
         setTooltip(null);
         if (tooltipTimer.current) clearTimeout(tooltipTimer.current);
         scheduleNavHide();
-      } }, /* @__PURE__ */ Spicetify.React.createElement("section", { className: "otd-shell" }, /* @__PURE__ */ Spicetify.React.createElement("p", { className: "otd-eyebrow" }, t(lang, "eyebrow")), /* @__PURE__ */ Spicetify.React.createElement("h1", null, t(lang, "errorTitle")), /* @__PURE__ */ Spicetify.React.createElement("p", { className: "otd-message" }, t(lang, "errorMsg", { date: dateLabel })), /* @__PURE__ */ Spicetify.React.createElement("pre", { className: "otd-error" }, error), /* @__PURE__ */ Spicetify.React.createElement("p", { className: "otd-hint" }, t(lang, "errorHint"))));
+      } }, /* @__PURE__ */ Spicetify.React.createElement("section", { className: "otd-shell" }, /* @__PURE__ */ Spicetify.React.createElement("p", { className: "otd-eyebrow" }, t(lang, "eyebrow")), /* @__PURE__ */ Spicetify.React.createElement("h1", null, t(lang, "errorTitle")), /* @__PURE__ */ Spicetify.React.createElement("p", { className: "otd-message" }, t(lang, "errorMsg", { date: dateLabel })), /* @__PURE__ */ Spicetify.React.createElement("pre", { className: "otd-error" }, error), /* @__PURE__ */ Spicetify.React.createElement("button", { type: "button", className: "otd-retry-btn", onClick: () => setRetryNonce((current) => current + 1) }, t(lang, "retry")), /* @__PURE__ */ Spicetify.React.createElement("p", { className: "otd-hint" }, t(lang, "errorHint"))));
     }
     return /* @__PURE__ */ Spicetify.React.createElement("main", { className: "otd-page", onMouseMove: handlePageMouseMove, onMouseLeave: () => {
       setTooltip(null);
       if (tooltipTimer.current) clearTimeout(tooltipTimer.current);
       scheduleNavHide();
-    } }, /* @__PURE__ */ Spicetify.React.createElement(DynamicBackground, { candidates: backgroundCandidates }), /* @__PURE__ */ Spicetify.React.createElement(FollowFab, { state: fabState, count: followedCount, lang, onToggle: handleFollowFab }), createPortal(yearNavigation, document.body), /* @__PURE__ */ Spicetify.React.createElement("section", { className: "otd-shell", onMouseMove: handlePageMouseMove, onMouseLeave: () => {
+    } }, /* @__PURE__ */ Spicetify.React.createElement(DynamicBackground, { candidates: tab === "albums" ? backgroundCandidates : birthdayBackgroundCandidates }), /* @__PURE__ */ Spicetify.React.createElement(FollowFab, { state: fabState, count: followedCount, lang, onToggle: handleFollowFab }), tab === "albums" && createPortal(yearNavigation, document.body), /* @__PURE__ */ Spicetify.React.createElement("section", { className: "otd-shell", onMouseMove: handlePageMouseMove, onMouseLeave: () => {
       setTooltip(null);
       if (tooltipTimer.current) clearTimeout(tooltipTimer.current);
       scheduleNavHide();
-    } }, /* @__PURE__ */ Spicetify.React.createElement("header", { className: "otd-heading" }, /* @__PURE__ */ Spicetify.React.createElement("div", { className: "otd-heading-left" }, /* @__PURE__ */ Spicetify.React.createElement("div", { className: "otd-app-icon", "aria-hidden": "true" }, /* @__PURE__ */ Spicetify.React.createElement(AppIcon, { size: 26 })), /* @__PURE__ */ Spicetify.React.createElement("div", null, /* @__PURE__ */ Spicetify.React.createElement("p", { className: "otd-eyebrow" }, t(lang, "eyebrow")), /* @__PURE__ */ Spicetify.React.createElement("h1", null, t(lang, "title")), /* @__PURE__ */ Spicetify.React.createElement("p", { className: "otd-subtitle" }, t(lang, "subtitle", { date: dateLabel })))), /* @__PURE__ */ Spicetify.React.createElement("div", { className: "otd-count-group" }, /* @__PURE__ */ Spicetify.React.createElement("span", { className: "otd-count" }, t(lang, "albumsThisDay", { count: genreFilteredItems.length.toLocaleString(lang) })), selectedGenres.length > 0 && /* @__PURE__ */ Spicetify.React.createElement("span", { className: "otd-count-filter" }, selectedGenres.map((g) => {
+    } }, /* @__PURE__ */ Spicetify.React.createElement("header", { className: "otd-heading" }, /* @__PURE__ */ Spicetify.React.createElement("div", { className: "otd-heading-left" }, /* @__PURE__ */ Spicetify.React.createElement("div", { className: "otd-app-icon", "aria-hidden": "true" }, /* @__PURE__ */ Spicetify.React.createElement(AppIcon, { size: 26 })), /* @__PURE__ */ Spicetify.React.createElement("div", null, /* @__PURE__ */ Spicetify.React.createElement("p", { className: "otd-eyebrow" }, t(lang, "eyebrow")), /* @__PURE__ */ Spicetify.React.createElement("h1", null, t(lang, "title")), /* @__PURE__ */ Spicetify.React.createElement("p", { className: "otd-subtitle" }, tab === "albums" ? t(lang, "subtitle", { date: dateLabel }) : t(lang, "subtitleBirthdays", { date: dateLabelShort })))), /* @__PURE__ */ Spicetify.React.createElement("div", { className: "otd-count-group" }, /* @__PURE__ */ Spicetify.React.createElement("span", { className: "otd-count" }, tab === "albums" ? t(lang, "albumsThisDay", { count: genreFilteredItems.length.toLocaleString(lang) }) : t(lang, "birthdaysThisDay", { count: displayedBirthdays.length.toLocaleString(lang) })), tab === "albums" && selectedGenres.length > 0 && /* @__PURE__ */ Spicetify.React.createElement("span", { className: "otd-count-filter" }, selectedGenres.map((g) => {
       const genre = MAIN_GENRES.find((x) => x.id === g);
       const count = genreCounts.get(g) ?? 0;
       return `${count.toLocaleString(lang)} ${genre?.label ?? g}`;
-    }).join(" · ")), /* @__PURE__ */ Spicetify.React.createElement(UpdateBadge, { lang }), /* @__PURE__ */ Spicetify.React.createElement("div", { className: "otd-settings" }, /* @__PURE__ */ Spicetify.React.createElement(
+    }).join(" · ")), /* @__PURE__ */ Spicetify.React.createElement(UpdateBadge, { lang }), /* @__PURE__ */ Spicetify.React.createElement("div", { className: "otd-header-controls" }, /* @__PURE__ */ Spicetify.React.createElement("div", { className: "otd-settings" }, /* @__PURE__ */ Spicetify.React.createElement(
       "button",
       {
         className: `otd-settings-trigger${settingsOpen ? " is-open" : ""}`,
@@ -2315,7 +2920,49 @@
         /* @__PURE__ */ Spicetify.React.createElement("span", { className: "otd-settings-name" }, info.native),
         active && /* @__PURE__ */ Spicetify.React.createElement("span", { className: "otd-settings-check" }, /* @__PURE__ */ Spicetify.React.createElement(CheckIcon, { size: 14 }))
       );
-    })))))), /* @__PURE__ */ Spicetify.React.createElement("div", { className: "otd-genre-filter" }, /* @__PURE__ */ Spicetify.React.createElement(
+    })))), /* @__PURE__ */ Spicetify.React.createElement("div", { className: "otd-day-nav" }, /* @__PURE__ */ Spicetify.React.createElement(
+      "button",
+      {
+        type: "button",
+        className: "otd-prev-day",
+        onClick: goToPreviousDay,
+        disabled: dayOffset >= MAX_DAYS_BACK,
+        title: dayOffset >= MAX_DAYS_BACK ? t(lang, "previousDayLimit", { days: MAX_DAYS_BACK }) : t(lang, "previousDayTitle")
+      },
+      /* @__PURE__ */ Spicetify.React.createElement(BackIcon, { size: 14 }),
+      /* @__PURE__ */ Spicetify.React.createElement("span", null, t(lang, "previousDay"))
+    ), dayOffset > 0 && /* @__PURE__ */ Spicetify.React.createElement(
+      "button",
+      {
+        type: "button",
+        className: "otd-prev-day otd-next-day",
+        onClick: goToNextDay,
+        title: t(lang, "nextDayTitle")
+      },
+      /* @__PURE__ */ Spicetify.React.createElement("span", null, t(lang, "nextDay")),
+      /* @__PURE__ */ Spicetify.React.createElement(ForwardIcon, { size: 14 })
+    ), dayOffset > 1 && /* @__PURE__ */ Spicetify.React.createElement(
+      "button",
+      {
+        type: "button",
+        className: "otd-prev-day otd-today-btn",
+        onClick: goToToday,
+        title: t(lang, "backToTodayTitle")
+      },
+      /* @__PURE__ */ Spicetify.React.createElement("span", null, t(lang, "backToToday"))
+    ))))), /* @__PURE__ */ Spicetify.React.createElement("div", { className: "otd-tabs", role: "tablist", "aria-label": t(lang, "tabsLabel") }, ["albums", "artists"].map((id) => /* @__PURE__ */ Spicetify.React.createElement(
+      "button",
+      {
+        key: id,
+        type: "button",
+        role: "tab",
+        id: `otd-tab-${id}`,
+        "aria-selected": tab === id,
+        className: `otd-tab${tab === id ? " is-active" : ""}`,
+        onClick: () => setTab(id)
+      },
+      t(lang, id === "albums" ? "tabAlbums" : "tabArtists")
+    ))), /* @__PURE__ */ Spicetify.React.createElement("div", { className: "otd-genre-filter" }, /* @__PURE__ */ Spicetify.React.createElement(
       "button",
       {
         type: "button",
@@ -2327,7 +2974,7 @@
       t(lang, "genreFilter"),
       " ",
       /* @__PURE__ */ Spicetify.React.createElement("span", null, selectedGenres.length, "/", MAX_SELECTED_GENRES)
-    ), selectedGenres.length > 0 && /* @__PURE__ */ Spicetify.React.createElement("button", { className: "otd-genre-clear", onClick: () => setSelectedGenres([]) }, t(lang, "clearFilters")), /* @__PURE__ */ Spicetify.React.createElement(
+    ), selectedGenres.length > 0 && /* @__PURE__ */ Spicetify.React.createElement("button", { className: "otd-genre-clear", onClick: () => setSelectedGenres([]) }, t(lang, "clearFilters")), tab === "albums" && /* @__PURE__ */ Spicetify.React.createElement(
       "button",
       {
         type: "button",
@@ -2368,7 +3015,22 @@
         /* @__PURE__ */ Spicetify.React.createElement("span", { className: "otd-genre-chip-check" }, checked ? "✓" : ""),
         /* @__PURE__ */ Spicetify.React.createElement("span", null, genre.label)
       );
-    })), selectedGenres.length === MAX_SELECTED_GENRES && /* @__PURE__ */ Spicetify.React.createElement("p", { className: "otd-genre-limit" }, t(lang, "limitReached"))))), onlyFollowed && followStatus === "loading" ? /* @__PURE__ */ Spicetify.React.createElement("p", { className: "otd-empty" }, t(lang, "loadingFollowed")) : anniversaryGroups.size ? orderedGroups.map(([year, yearItems]) => /* @__PURE__ */ Spicetify.React.createElement(
+    })), selectedGenres.length === MAX_SELECTED_GENRES && /* @__PURE__ */ Spicetify.React.createElement("p", { className: "otd-genre-limit" }, t(lang, "limitReached"))))), tab === "artists" ? onlyFollowed && followStatus === "loading" ? /* @__PURE__ */ Spicetify.React.createElement("p", { className: "otd-empty" }, t(lang, "loadingFollowed")) : /* @__PURE__ */ Spicetify.React.createElement(
+      BirthdaysView,
+      {
+        key: monthDay,
+        lang,
+        status: birthdaysStatus,
+        artists: displayedBirthdays,
+        totalBeforeFilters: birthdayItemsAll.length,
+        hasGenreFilter: selectedGenres.length > 0,
+        onlyFollowedActive: onlyFollowed && followStatus === "ready",
+        dateLabel: dateLabelShort,
+        viewYear: currentYear,
+        errorMessage: birthdaysErr?.message ?? "",
+        onRetry: () => setBirthdaysNonce((current) => current + 1)
+      }
+    ) : dayLoading ? /* @__PURE__ */ Spicetify.React.createElement("p", { className: "otd-empty" }, t(lang, "loading", { date: dateLabel })) : error ? /* @__PURE__ */ Spicetify.React.createElement("div", { className: "otd-empty" }, /* @__PURE__ */ Spicetify.React.createElement("p", null, t(lang, "errorMsg", { date: dateLabel })), /* @__PURE__ */ Spicetify.React.createElement("pre", { className: "otd-error" }, error), /* @__PURE__ */ Spicetify.React.createElement("button", { type: "button", className: "otd-retry-btn", onClick: () => setRetryNonce((current) => current + 1) }, t(lang, "retry"))) : onlyFollowed && followStatus === "loading" ? /* @__PURE__ */ Spicetify.React.createElement("p", { className: "otd-empty" }, t(lang, "loadingFollowed")) : anniversaryGroups.size ? orderedGroups.map(([year, yearItems]) => /* @__PURE__ */ Spicetify.React.createElement(
       AnniversarySection,
       {
         key: year,
@@ -2379,7 +3041,7 @@
         onPreview: openPreview,
         sectionRef: getSectionRef(year)
       }
-    )) : /* @__PURE__ */ Spicetify.React.createElement("p", { className: "otd-empty" }, selectedGenres.length > 0 ? !items.some((item) => item.genres?.length) ? t(lang, "emptyGenresMsg") : t(lang, "emptyNoMatch") : onlyFollowed && followStatus === "ready" ? t(lang, "followedEmpty") : t(lang, "emptyNone")), /* @__PURE__ */ Spicetify.React.createElement("p", { className: "otd-attribution" }, t(lang, "attribution"))), preview && createPortal(
+    )) : /* @__PURE__ */ Spicetify.React.createElement("p", { className: "otd-empty" }, selectedGenres.length > 0 ? !items.some((item) => item.genres?.length) ? t(lang, "emptyGenresMsg") : t(lang, "emptyNoMatch") : onlyFollowed && followStatus === "ready" ? t(lang, "followedEmpty") : t(lang, "emptyNone")), /* @__PURE__ */ Spicetify.React.createElement("p", { className: "otd-attribution" }, t(lang, tab === "albums" ? "attribution" : "attributionBirthdays"))), preview && createPortal(
       /* @__PURE__ */ Spicetify.React.createElement(
         "div",
         {
