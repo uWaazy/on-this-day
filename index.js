@@ -1,4 +1,4 @@
-/* On This Day v1.1.4 — https://github.com/uWaazy/on-this-day
+/* On This Day v1.1.5 — https://github.com/uWaazy/on-this-day
  * Bundle legível (sem minificação), gerado a partir do código-fonte do projeto.
  * Roda dentro do Spotify via Spicetify; consulta só: Spotify (sessão local), MusicBrainz/Cover Art Archive (catálogo),
  * GitHub (verificação de nova versão). Sem coleta de dados e sem credenciais. */
@@ -1199,7 +1199,7 @@
   }
 
   // src/services/updates.ts
-  var APP_VERSION = true ? "1.1.4" : "0.0.0";
+  var APP_VERSION = true ? "1.1.5" : "0.0.0";
   var REPO = true ? "uWaazy/on-this-day" : "uWaazy/on-this-day";
   var REPO_URL = `https://github.com/${REPO}`;
   var RAW_BASE = `https://raw.githubusercontent.com/${REPO}/main`;
@@ -1288,11 +1288,21 @@
     const copyTimer = useRef(null);
     useEffect(() => {
       let cancelled = false;
-      void checkForUpdate().then((result) => {
-        if (!cancelled) setInfo(result);
-      });
+      const check = () => {
+        void checkForUpdate(true).then((result) => {
+          if (!cancelled) setInfo(result);
+        });
+      };
+      check();
+      const timer = window.setInterval(check, 10 * 60 * 1e3);
+      const onVisible = () => {
+        if (document.visibilityState === "visible") check();
+      };
+      document.addEventListener("visibilitychange", onVisible);
       return () => {
         cancelled = true;
+        window.clearInterval(timer);
+        document.removeEventListener("visibilitychange", onVisible);
       };
     }, []);
     useEffect(() => {

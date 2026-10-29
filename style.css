@@ -1545,6 +1545,45 @@
 .otd-version-badge.has-update:hover { background: #3be477; }
 .otd-version-new { font-weight: 800; }
 
+/* LED verde girando em volta do selo quando há atualização */
+.otd-version-badge.has-update {
+  position: relative;
+  isolation: isolate;
+  overflow: hidden;
+}
+
+.otd-version-badge.has-update::before {
+  content: "";
+  position: absolute;
+  z-index: -2;
+  left: 50%;
+  top: 50%;
+  width: 300%;
+  aspect-ratio: 1;
+  transform: translate(-50%, -50%) rotate(0deg);
+  background: conic-gradient(from 0deg, transparent 0 55%, rgba(255,255,255,.95) 78%, #b8ffd0 88%, transparent 100%);
+  animation: otd-led-spin 1.8s linear infinite;
+}
+
+.otd-version-badge.has-update::after {
+  content: "";
+  position: absolute;
+  z-index: -1;
+  inset: 2px;
+  border-radius: inherit;
+  background: var(--otd-accent);
+}
+
+.otd-version-badge.has-update:hover::after { background: #3be477; }
+
+@keyframes otd-led-spin {
+  to { transform: translate(-50%, -50%) rotate(360deg); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .otd-version-badge.has-update::before { animation: none; }
+}
+
 .otd-version-dot {
   width: 7px;
   height: 7px;
