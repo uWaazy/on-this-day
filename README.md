@@ -38,6 +38,10 @@
 - **Update notice** — the version number at the top right turns green when a new version is available, with copy-and-paste update instructions.
 - **English, Português and Español** interface.
 
+## Artists tab and previous day
+
+The **Artists** tab lists artists born on the viewed day (photo, name, birth date, age, country and genres); clicking the photo opens the artist on Spotify. The **Previous day** button (below the language selector) goes back one day at a time. Birthday data comes from the MusicBrainz artist dump and is published with the catalog as `catalog/birthdays/MM-DD.json`. Generate it locally with `npm run catalog:birthdays`; the monthly "Publish daily catalog" workflow does it automatically.
+
 ## Installation
 
 > Requires the Spotify desktop app and [Spicetify](https://spicetify.app/docs/getting-started) already installed.
@@ -105,7 +109,3 @@ Album data comes from [MusicBrainz](https://musicbrainz.org/) (published as dail
 ## License
 
 Released under the **MIT License** — see [LICENSE](LICENSE).
-
-## Artists tab and previous day
-
-The **Artists** tab lists artists born on the viewed day (photo, name, birth date, age, country and genres); clicking the photo opens the artist on Spotify. The **Previous day** button (below the language selector) goes back one day at a time. Birthday data comes from the MusicBrainz artist dump and is published with the catalog as `catalog/birthdays/MM-DD.json`. Generate it locally with `npm run catalog:birthdays`; the monthly "Publish daily catalog" workflow does it automatically.

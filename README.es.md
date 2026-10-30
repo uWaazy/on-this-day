@@ -38,6 +38,10 @@
 - **Aviso de actualización** — el número de versión arriba a la derecha se pone verde cuando hay una versión nueva, con instrucciones para copiar y pegar.
 - Interfaz en **Español, English y Português**.
 
+## Pestaña Artistas y día anterior
+
+La pestaña **Artistas** lista a quienes nacieron el día mostrado (foto, nombre, fecha de nacimiento, edad, país y géneros); al hacer clic en la foto se abre el artista en Spotify. El botón **Día anterior** (debajo del selector de idioma) retrocede un día por clic. Los cumpleaños provienen del volcado de artistas de MusicBrainz y se publican con el catálogo en `catalog/birthdays/MM-DD.json`. Genéralos localmente con `npm run catalog:birthdays`; el workflow mensual "Publish daily catalog" lo hace automáticamente.
+
 ## Instalación
 
 > Necesitas la aplicación de escritorio de Spotify y [Spicetify](https://spicetify.app/docs/getting-started) ya instalados.
@@ -105,7 +109,3 @@ Los datos de los álbumes vienen de [MusicBrainz](https://musicbrainz.org/) (pub
 ## Licencia
 
 Publicado bajo la **Licencia MIT** — consulta [LICENSE](LICENSE).
-
-## Pestaña Artistas y día anterior
-
-La pestaña **Artistas** lista a quienes nacieron el día mostrado (foto, nombre, fecha de nacimiento, edad, país y géneros); al hacer clic en la foto se abre el artista en Spotify. El botón **Día anterior** (debajo del selector de idioma) retrocede un día por clic. Los cumpleaños provienen del volcado de artistas de MusicBrainz y se publican con el catálogo en `catalog/birthdays/MM-DD.json`. Genéralos localmente con `npm run catalog:birthdays`; el workflow mensual "Publish daily catalog" lo hace automáticamente.

@@ -38,6 +38,10 @@
 - **Aviso de atualização** — o número da versão no canto superior direito fica verde quando há versão nova, com as instruções para copiar e colar.
 - Interface em **Português, English e Español**.
 
+## Aba Artistas e dia anterior
+
+A aba **Artistas** lista quem nasceu no dia exibido (foto, nome, data de nascimento, idade, país e gêneros); clicar na foto abre o artista no Spotify. O botão **Dia anterior** (abaixo do seletor de idioma) volta um dia por clique. Os aniversários vêm do dump de artistas do MusicBrainz e são publicados junto com o catálogo em `catalog/birthdays/MM-DD.json`. Gere localmente com `npm run catalog:birthdays`; o workflow mensal "Publish daily catalog" faz isso automaticamente.
+
 ## Instalação
 
 > Precisa do aplicativo desktop do Spotify e do [Spicetify](https://spicetify.app/docs/getting-started) já instalados.
@@ -105,7 +109,3 @@ Os dados dos álbuns vêm do [MusicBrainz](https://musicbrainz.org/) (publicados
 ## Licença
 
 Distribuído sob a **Licença MIT** — veja [LICENSE](LICENSE).
-
-## Aba Artistas e dia anterior
-
-A aba **Artistas** lista quem nasceu no dia exibido (foto, nome, data de nascimento, idade, país e gêneros); clicar na foto abre o artista no Spotify. O botão **Dia anterior** (abaixo do seletor de idioma) volta um dia por clique. Os aniversários vêm do dump de artistas do MusicBrainz e são publicados junto com o catálogo em `catalog/birthdays/MM-DD.json`. Gere localmente com `npm run catalog:birthdays`; o workflow mensal "Publish daily catalog" faz isso automaticamente.
