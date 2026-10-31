@@ -20,12 +20,6 @@
 
 ---
 
-## Prévia
-
-<p align="center">
-  <img src="./assets/preview.jpg" alt="On This Day preview" width="900">
-</p>
-
 ## Recursos
 
 - **Álbuns do dia** — todos os álbuns lançados na data de hoje em anos anteriores, agrupados por aniversário ("12 anos atrás · 2014"), dos mais populares aos menos. Um botão inverte a ordem dos anos.
@@ -101,10 +95,6 @@ Ele baixa o app deste repositório, confere os arquivos, ativa o `on-this-day` e
 ## Dados e privacidade
 
 Os dados dos álbuns vêm do [MusicBrainz](https://musicbrainz.org/) (publicados em arquivos diários no GitHub Pages deste repositório); as capas, do Cover Art Archive, Spotify e iTunes; as fotos de artistas, do Spotify (e da Wikipedia quando preciso). O app fala com o Spotify apenas pela sua própria sessão já aberta (nenhuma senha, token ou login é pedido ou guardado) e consulta este repositório para saber de novas versões. Não há rastreamento nem analytics. O código que você executa é o `index.js` legível, sem minificação, deste repositório.
-
-<a href="https://ko-fi.com/uwaazy" target="_blank">
-  <img src="https://img.shields.io/badge/Support%20my%20Work-FF5E5B?style=for-the-badge&logo=kofi&logoColor=white" alt="Ko-fi Donate">
-</a>
 
 ## Licença
 
