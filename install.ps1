@@ -1,15 +1,15 @@
 <#
-  On This Day - instalador / atualizador via RAW (Windows PowerShell)
+  On This Day - installer / updater via RAW (Windows PowerShell)
 
-  Uso (instala ou atualiza):
+  Usage (installs or updates):
       irm https://raw.githubusercontent.com/uWaazy/on-this-day/main/install.ps1 | iex
 
-  O que faz (nada além disto):
-    1. Localiza o Spicetify e a pasta CustomApps.
-    2. Baixa manifest.json, index.js e style.css deste repositório (raw.githubusercontent.com).
-    3. Confere se os arquivos são válidos antes de substituir a instalação atual.
-    4. Registra o app (spicetify config custom_apps on-this-day) e roda spicetify apply.
-  Não coleta dados, não pede senhas e não instala nada fora da pasta do app.
+  What it does (nothing else):
+    1. Finds Spicetify and the CustomApps folder.
+    2. Downloads manifest.json, index.js and style.css from this repository (raw.githubusercontent.com).
+    3. Checks that the files are valid before replacing the current installation.
+    4. Registers the app (spicetify config custom_apps on-this-day) and runs spicetify apply.
+  It does not collect data, ask for passwords or install anything outside the app folder.
 #>
 
 $ErrorActionPreference = "Stop"
@@ -25,14 +25,14 @@ function Write-Warn2($text){ Write-Host "  ! $text" -ForegroundColor Yellow }
 
 function Install-OnThisDay {
     Write-Host ""
-    Write-Host "On This Day - instalador" -ForegroundColor Green
+    Write-Host "On This Day - installer" -ForegroundColor Green
     Write-Host "------------------------"
 
-    # PowerShell 5.1 antigo precisa de TLS 1.2 para falar com o GitHub.
+    # Older PowerShell 5.1 needs TLS 1.2 to talk to GitHub.
     try { [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12 } catch { }
 
     # 1) Spicetify
-    Write-Step "Procurando o Spicetify..."
+    Write-Step "Looking for Spicetify..."
     $spicetify = $null
     $cmd = Get-Command spicetify -ErrorAction SilentlyContinue
     if ($cmd) { $spicetify = $cmd.Source }
@@ -46,22 +46,22 @@ function Install-OnThisDay {
     }
     if (-not $spicetify) {
         Write-Host ""
-        Write-Host "  Spicetify nao encontrado." -ForegroundColor Red
-        Write-Host "  Instale primeiro: https://spicetify.app/docs/getting-started  e rode este comando de novo." -ForegroundColor Red
+        Write-Host "  Spicetify not found." -ForegroundColor Red
+        Write-Host "  Install it first: https://spicetify.app/docs/getting-started  then run this command again." -ForegroundColor Red
         return
     }
     Write-Ok $spicetify
 
     # 2) Pasta CustomApps
-    Write-Step "Localizando a pasta CustomApps..."
+    Write-Step "Locating the CustomApps folder..."
     $userData = $null
     try { $userData = (& $spicetify path userdata 2>$null | Select-Object -Last 1).Trim() } catch { }
     if (-not $userData -or -not (Test-Path $userData)) { $userData = Join-Path $env:APPDATA "spicetify" }
     $target = Join-Path $userData "CustomApps\$AppId"
     Write-Ok $target
 
-    # 3) Download para uma pasta temporaria + validacao
-    Write-Step "Baixando os arquivos do GitHub..."
+    # 3) Download to a temporary folder + validation
+    Write-Step "Downloading files from GitHub..."
     $temp = Join-Path ([IO.Path]::GetTempPath()) ("on-this-day-" + [Guid]::NewGuid().ToString("N"))
     New-Item -ItemType Directory -Path $temp -Force | Out-Null
     try {
@@ -72,38 +72,38 @@ function Install-OnThisDay {
         }
 
         $manifest = Get-Content (Join-Path $temp "manifest.json") -Raw -Encoding UTF8 | ConvertFrom-Json
-        if ($manifest.name -ne "On This Day" -or -not $manifest.icon) { throw "manifest.json invalido (o download pode ter falhado)." }
-        if ((Get-Item (Join-Path $temp "index.js")).Length -lt 5000) { throw "index.js incompleto." }
-        if ((Get-Item (Join-Path $temp "style.css")).Length -lt 1000) { throw "style.css incompleto." }
-        Write-Ok ("Versao " + $manifest.version)
+        if ($manifest.name -ne "On This Day" -or -not $manifest.icon) { throw "Invalid manifest.json (the download may have failed)." }
+        if ((Get-Item (Join-Path $temp "index.js")).Length -lt 5000) { throw "Incomplete index.js." }
+        if ((Get-Item (Join-Path $temp "style.css")).Length -lt 1000) { throw "Incomplete style.css." }
+        Write-Ok ("Version " + $manifest.version)
 
-        # 4) Instala (substitui a versao anterior)
-        Write-Step "Instalando..."
+        # 4) Install (replaces the previous version)
+        Write-Step "Installing..."
         if (Test-Path $target) { Remove-Item -Recurse -Force $target }
         New-Item -ItemType Directory -Path $target -Force | Out-Null
         Copy-Item (Join-Path $temp "*") $target -Force
-        Write-Ok "Arquivos copiados."
+        Write-Ok "Files copied."
     }
     finally {
         Remove-Item -Recurse -Force $temp -ErrorAction SilentlyContinue
     }
 
-    # 5) Ativa e aplica
-    Write-Step "Ativando o app e aplicando no Spotify..."
+    # 5) Enable and apply
+    Write-Step "Enabling the app and applying it to Spotify..."
     & $spicetify config custom_apps $AppId | Out-Null
     & $spicetify apply
     if ($LASTEXITCODE -ne 0) {
-        Write-Warn2 "O 'spicetify apply' retornou erro. Se for a primeira vez com Spicetify, rode:  spicetify backup apply"
+        Write-Warn2 "'spicetify apply' returned an error. If this is your first time with Spicetify, run:  spicetify backup apply"
         return
     }
 
     Write-Host ""
-    Write-Host "Pronto! On This Day v$($manifest.version) instalado. Se o Spotify estava aberto, ele reinicia sozinho." -ForegroundColor Green
+    Write-Host "Done! On This Day v$($manifest.version) installed. If Spotify was open, it restarts by itself." -ForegroundColor Green
 }
 
 try { Install-OnThisDay }
 catch {
     Write-Host ""
-    Write-Host "Falha: $($_.Exception.Message)" -ForegroundColor Red
-    Write-Host "Tente o metodo manual descrito no README do projeto." -ForegroundColor Yellow
+    Write-Host "Failed: $($_.Exception.Message)" -ForegroundColor Red
+    Write-Host "Try the manual method described in the project README." -ForegroundColor Yellow
 }
