@@ -1935,3 +1935,23 @@
 @media (max-width: 700px) {
   .otd-day-nav { justify-content: flex-start; }
 }
+
+/* ===== Abas mantidas montadas e capa em carregamento ===== */
+.otd-tab-panel[hidden] { display: none !important; }
+
+.otd-cover-skeleton {
+  width: 100%;
+  height: 100%;
+  background: linear-gradient(100deg, #1c1c1c 30%, #262626 50%, #1c1c1c 70%);
+  background-size: 220% 100%;
+  animation: otd-skeleton 1.4s ease-in-out infinite;
+}
+
+@keyframes otd-skeleton {
+  from { background-position: 120% 0; }
+  to { background-position: -120% 0; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .otd-cover-skeleton { animation: none; }
+}

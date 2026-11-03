@@ -1,4 +1,4 @@
-/* On This Day v1.1.5 — https://github.com/uWaazy/on-this-day
+/* On This Day v1.1.6 — https://github.com/uWaazy/on-this-day
  * Bundle legível (sem minificação), gerado a partir do código-fonte do projeto.
  * Roda dentro do Spotify via Spicetify; consulta só: Spotify (sessão local), MusicBrainz/Cover Art Archive (catálogo),
  * GitHub (verificação de nova versão). Sem coleta de dados e sem credenciais. */
@@ -167,7 +167,7 @@
       pruneCache(monthDay);
       void prefetchNearbyDays(monthDay);
       if (!cached.cachedAt || Date.now() - cached.cachedAt > REVALIDATE_AFTER_MS) {
-        void fetchDay(monthDay).then((fresh) => writeCache(monthDay, fresh)).catch(() => {
+        void fetchDay(monthDay).then((fresh2) => writeCache(monthDay, fresh2)).catch(() => {
         });
       }
       return cached;
@@ -292,7 +292,7 @@
       pruneCache2(monthDay);
       prefetchNeighbours(monthDay);
       if (!cached.cachedAt || Date.now() - cached.cachedAt > REVALIDATE_AFTER_MS2) {
-        void fetchDay2(monthDay).then((fresh) => writeCache2(monthDay, fresh)).catch(() => {
+        void fetchDay2(monthDay).then((fresh2) => writeCache2(monthDay, fresh2)).catch(() => {
         });
       }
       return cached;
@@ -375,18 +375,18 @@
     return normalized || normalizeText(value);
   }
   function createLimiter(max) {
-    let active = 0;
+    let active2 = 0;
     const queue = [];
     return function limit(task) {
       return new Promise((resolve4, reject) => {
         const start = () => {
-          active += 1;
+          active2 += 1;
           task().then(resolve4, reject).finally(() => {
-            active -= 1;
+            active2 -= 1;
             queue.shift()?.();
           });
         };
-        if (active < max) start();
+        if (active2 < max) start();
         else queue.push(start);
       });
     };
@@ -1199,7 +1199,7 @@
   }
 
   // src/services/updates.ts
-  var APP_VERSION = true ? "1.1.5" : "0.0.0";
+  var APP_VERSION = true ? "1.1.6" : "0.0.0";
   var REPO = true ? "uWaazy/on-this-day" : "uWaazy/on-this-day";
   var REPO_URL = `https://github.com/${REPO}`;
   var RAW_BASE = `https://raw.githubusercontent.com/${REPO}/main`;
@@ -1389,14 +1389,14 @@
     if (persistTimer !== void 0) return;
     persistTimer = window.setTimeout(() => {
       persistTimer = void 0;
-      const current = loadStore();
-      const keys = Object.keys(current);
+      const current2 = loadStore();
+      const keys = Object.keys(current2);
       if (keys.length > MAX_ENTRIES) {
-        keys.sort((a, b) => current[a].at - current[b].at);
-        for (const key of keys.slice(0, keys.length - MAX_ENTRIES)) delete current[key];
+        keys.sort((a, b) => current2[a].at - current2[b].at);
+        for (const key of keys.slice(0, keys.length - MAX_ENTRIES)) delete current2[key];
       }
       try {
-        localStorage.setItem(STORAGE_KEY, JSON.stringify(current));
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(current2));
       } catch {
       }
     }, 1500);
@@ -1613,6 +1613,264 @@
     return pending;
   }
 
+  // src/services/cover-cache.ts
+  var FINAL_KEY = "on-this-day:cover-final:v1";
+  var FINAL_TTL_MS = 30 * 24 * 60 * 60 * 1e3;
+  var MAX_FINAL = 700;
+  var MAX_BLOBS = 900;
+  var MAX_PARALLEL = 10;
+  var MAX_PARALLEL_LOW = 2;
+  var FETCH_TIMEOUT_MS = 9e3;
+  var SIZE = 250;
+  var blobs = /* @__PURE__ */ new Map();
+  var failed = /* @__PURE__ */ new Set();
+  var finals = null;
+  var finalsTimer;
+  var successes = 0;
+  var quickNetworkFailures = 0;
+  var fetchBlocked = false;
+  function loadFinals() {
+    if (finals) return finals;
+    finals = {};
+    try {
+      const parsed = JSON.parse(localStorage.getItem(FINAL_KEY) ?? "null");
+      if (parsed && typeof parsed === "object") finals = parsed;
+    } catch {
+    }
+    return finals;
+  }
+  function saveFinalsSoon() {
+    if (finalsTimer !== void 0) return;
+    finalsTimer = window.setTimeout(() => {
+      finalsTimer = void 0;
+      const all = loadFinals();
+      const keys = Object.keys(all);
+      if (keys.length > MAX_FINAL) {
+        keys.sort((a, b) => all[a].t - all[b].t);
+        for (const key of keys.slice(0, keys.length - MAX_FINAL)) delete all[key];
+      }
+      try {
+        localStorage.setItem(FINAL_KEY, JSON.stringify(all));
+      } catch {
+      }
+    }, 2e3);
+  }
+  function rememberFinal(mbid, url) {
+    if (!/^https:\/\//.test(url) || url.length > 300) return;
+    loadFinals()[mbid] = { u: url, t: Date.now() };
+    saveFinalsSoon();
+  }
+  function peekCoverSrc(mbid) {
+    const blob = blobs.get(mbid);
+    if (blob) return { src: blob, kind: "blob" };
+    const entry = loadFinals()[mbid];
+    if (entry && typeof entry.u === "string" && Date.now() - entry.t < FINAL_TTL_MS) return { src: entry.u, kind: "final" };
+    return null;
+  }
+  function forgetFinal(mbid) {
+    if (loadFinals()[mbid]) {
+      delete loadFinals()[mbid];
+      saveFinalsSoon();
+    }
+  }
+  var tasks = /* @__PURE__ */ new Map();
+  var high = [];
+  var low = [];
+  var active = 0;
+  async function download(mbid) {
+    const startedAt = Date.now();
+    const controller = typeof AbortController !== "undefined" ? new AbortController() : null;
+    const timer = window.setTimeout(() => controller?.abort(), FETCH_TIMEOUT_MS);
+    try {
+      const response = await fetch(caaCoverUrl(mbid, SIZE), { signal: controller?.signal, credentials: "omit" });
+      if (!response.ok) throw Object.assign(new Error(`cover ${response.status}`), { http: true });
+      const blob = await response.blob();
+      if (!blob.type.startsWith("image/") || blob.size < 200) throw Object.assign(new Error("not an image"), { http: true });
+      successes += 1;
+      quickNetworkFailures = 0;
+      if (response.url) rememberFinal(mbid, response.url);
+      if (blobs.size >= MAX_BLOBS) return response.url || null;
+      const objectUrl = URL.createObjectURL(blob);
+      blobs.set(mbid, objectUrl);
+      return objectUrl;
+    } catch (error) {
+      failed.add(mbid);
+      const instant = !error?.http && Date.now() - startedAt < 500;
+      quickNetworkFailures = instant ? quickNetworkFailures + 1 : 0;
+      if (successes === 0 && quickNetworkFailures >= 6) fetchBlocked = true;
+      return null;
+    } finally {
+      window.clearTimeout(timer);
+    }
+  }
+  function pump() {
+    while (active < MAX_PARALLEL) {
+      const task = high.shift() ?? (active < MAX_PARALLEL_LOW ? low.shift() : void 0);
+      if (!task) return;
+      task.started = true;
+      active += 1;
+      void download(task.mbid).then(task.resolve).finally(() => {
+        active -= 1;
+        tasks.delete(task.mbid);
+        pump();
+      });
+    }
+  }
+  function request(mbid, priority) {
+    const known = blobs.get(mbid);
+    if (known) return Promise.resolve(known);
+    if (fetchBlocked || failed.has(mbid)) return Promise.resolve(null);
+    const existing = tasks.get(mbid);
+    if (existing) {
+      if (priority === "high" && !existing.started && existing.priority === "low") {
+        low.splice(low.indexOf(existing), 1);
+        existing.priority = "high";
+        high.push(existing);
+        pump();
+      }
+      return existing.promise;
+    }
+    let resolve4;
+    const promise = new Promise((done) => {
+      resolve4 = done;
+    });
+    const task = { mbid, priority, started: false, promise, resolve: resolve4 };
+    tasks.set(mbid, task);
+    (priority === "high" ? high : low).push(task);
+    pump();
+    return promise;
+  }
+  function fetchCover(mbid) {
+    return request(mbid, "high");
+  }
+  function prefetchCovers(mbids) {
+    for (const mbid of mbids) {
+      if (peekCoverSrc(mbid)) continue;
+      void request(mbid, "low");
+    }
+  }
+
+  // src/services/view-state.ts
+  var KEY = "on-this-day:view-state:v1";
+  var MAX_EXPANDED_KEYS = 400;
+  function todayKey() {
+    const now = /* @__PURE__ */ new Date();
+    return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
+  }
+  function fresh() {
+    return { day: todayKey(), dayOffset: 0, tab: "albums", scroll: { albums: 0, artists: 0 }, expanded: {} };
+  }
+  function sane(value) {
+    if (!value || typeof value !== "object") return null;
+    const v = value;
+    if (typeof v.day !== "string" || v.tab !== "albums" && v.tab !== "artists") return null;
+    const number = (n) => typeof n === "number" && Number.isFinite(n) && n >= 0 ? n : 0;
+    const expanded = {};
+    if (v.expanded && typeof v.expanded === "object") {
+      for (const [key, count] of Object.entries(v.expanded)) if (typeof count === "number" && count > 0) expanded[key] = count;
+    }
+    return {
+      day: v.day,
+      dayOffset: Math.floor(number(v.dayOffset)),
+      tab: v.tab,
+      scroll: { albums: number(v.scroll?.albums), artists: number(v.scroll?.artists) },
+      expanded
+    };
+  }
+  var memory3 = null;
+  var persistTimer2;
+  function current() {
+    if (!memory3) {
+      try {
+        memory3 = sane(JSON.parse(sessionStorage.getItem(KEY) ?? "null"));
+      } catch {
+        memory3 = null;
+      }
+    }
+    if (!memory3 || memory3.day !== todayKey()) memory3 = fresh();
+    return memory3;
+  }
+  function persistSoon2() {
+    if (persistTimer2 !== void 0) return;
+    persistTimer2 = window.setTimeout(() => {
+      persistTimer2 = void 0;
+      try {
+        sessionStorage.setItem(KEY, JSON.stringify(current()));
+      } catch {
+      }
+    }, 250);
+  }
+  function getViewState() {
+    return current();
+  }
+  function setViewTab(tab) {
+    current().tab = tab;
+    persistSoon2();
+  }
+  function setViewDayOffset(dayOffset) {
+    const state = current();
+    state.dayOffset = dayOffset;
+    state.scroll = { albums: 0, artists: 0 };
+    persistSoon2();
+  }
+  function getSavedScroll(tab) {
+    return current().scroll[tab];
+  }
+  var frozenUntil = 0;
+  function freezeScrollSaving(ms) {
+    frozenUntil = Date.now() + ms;
+  }
+  function saveScroll(tab, top) {
+    if (Date.now() < frozenUntil) return;
+    current().scroll[tab] = Math.max(0, Math.round(top));
+    persistSoon2();
+  }
+  var captureScroll = null;
+  function registerScrollCapture(capture) {
+    captureScroll = capture;
+  }
+  function beforeLeavingApp() {
+    try {
+      captureScroll?.();
+    } catch {
+    }
+    freezeScrollSaving(5e3);
+    persistNow();
+  }
+  function persistNow() {
+    if (persistTimer2 !== void 0) {
+      window.clearTimeout(persistTimer2);
+      persistTimer2 = void 0;
+    }
+    try {
+      sessionStorage.setItem(KEY, JSON.stringify(current()));
+    } catch {
+    }
+  }
+  function getExpanded(key, fallback) {
+    return current().expanded[key] ?? fallback;
+  }
+  function setExpanded(key, count, fallback) {
+    const state = current();
+    if (count <= fallback) delete state.expanded[key];
+    else {
+      state.expanded[key] = count;
+      const keys = Object.keys(state.expanded);
+      if (keys.length > MAX_EXPANDED_KEYS) for (const old of keys.slice(0, keys.length - MAX_EXPANDED_KEYS)) delete state.expanded[old];
+    }
+    persistSoon2();
+  }
+  function findScroller(from) {
+    let nearest = null;
+    for (let el = from?.parentElement ?? null; el; el = el.parentElement) {
+      const overflowY = getComputedStyle(el).overflowY;
+      if (overflowY !== "auto" && overflowY !== "scroll" && overflowY !== "overlay") continue;
+      if (el.scrollHeight > el.clientHeight + 1) return el;
+      nearest ?? (nearest = el);
+    }
+    return nearest ?? document.scrollingElement ?? null;
+  }
+
   // src/components/ScoreInfo.tsx
   function ScoreInfo({ text, children, className }) {
     const ref = useRef(null);
@@ -1715,7 +1973,21 @@
   var AlbumCard = memo(function AlbumCard2({ item, lang, onPreview }) {
     const year = item.firstReleaseDate.slice(0, 4);
     const [hasCover, setHasCover] = useState(true);
-    const [coverSrc, setCoverSrc] = useState(() => peekCachedCover(item.mbid) ?? `https://coverartarchive.org/release-group/${item.mbid}/front-250`);
+    const srcKind = useRef(null);
+    const [coverSrc, setCoverSrc] = useState(() => {
+      const known = peekCoverSrc(item.mbid);
+      if (known) {
+        srcKind.current = known.kind;
+        return known.src;
+      }
+      const spotify = peekCachedCover(item.mbid);
+      if (spotify) {
+        srcKind.current = "spotify";
+        return spotify;
+      }
+      return null;
+    });
+    const slowTimer = useRef(null);
     const fallbackStarted = useRef(false);
     const loaded = useRef(false);
     const wrapRef = useRef(null);
@@ -1732,6 +2004,7 @@
     }
     function openSpotifyAlbum() {
       clearClickTimer();
+      beforeLeavingApp();
       void openAlbumInSpotify(item);
     }
     function warmUpLookup() {
@@ -1757,6 +2030,7 @@
         if (!mounted.current) return;
         if (url) {
           loaded.current = false;
+          srcKind.current = "spotify";
           setCoverSrc(url);
           setHasCover(true);
         } else if (attempt === 0) {
@@ -1766,7 +2040,27 @@
         }
       });
     }
+    function useCoverArtArchive() {
+      srcKind.current = "caa";
+      loaded.current = false;
+      setCoverSrc(caaCoverUrl(item.mbid, 250));
+      startSlowTimer();
+    }
+    function startSlowTimer() {
+      if (slowTimer.current) return;
+      slowTimer.current = window.setTimeout(() => {
+        if (!loaded.current && !fallbackStarted.current) {
+          fallbackStarted.current = true;
+          recoverCover();
+        }
+      }, 7e3);
+    }
     function handleCoverError() {
+      if (srcKind.current === "final" || srcKind.current === "blob") {
+        forgetFinal(item.mbid);
+        useCoverArtArchive();
+        return;
+      }
       if (fallbackStarted.current) {
         if (!loaded.current) setHasCover(false);
         return;
@@ -1776,34 +2070,42 @@
     }
     useEffect(() => {
       mounted.current = true;
-      let slowTimer;
-      const startSlowTimer = () => {
-        if (slowTimer) return;
-        slowTimer = window.setTimeout(() => {
-          if (!loaded.current && !fallbackStarted.current) {
-            fallbackStarted.current = true;
-            recoverCover();
+      const hadSrc = coverSrc !== null;
+      if (srcKind.current === "blob") loaded.current = true;
+      const begin = () => {
+        if (hadSrc) {
+          if (srcKind.current === "final" || srcKind.current === "spotify") startSlowTimer();
+          return;
+        }
+        void fetchCover(item.mbid).then((url) => {
+          if (!mounted.current) return;
+          if (url) {
+            loaded.current = true;
+            srcKind.current = url.startsWith("blob:") ? "blob" : "final";
+            setCoverSrc(url);
+          } else {
+            useCoverArtArchive();
           }
-        }, 7e3);
+        });
       };
       let observer;
       const node = wrapRef.current;
       if (node && typeof IntersectionObserver !== "undefined") {
         observer = new IntersectionObserver((entries) => {
           if (entries.some((entry) => entry.isIntersecting)) {
-            startSlowTimer();
             observer?.disconnect();
+            begin();
           }
-        });
+        }, { rootMargin: "900px 0px" });
         observer.observe(node);
       } else {
-        startSlowTimer();
+        begin();
       }
       return () => {
         mounted.current = false;
         clearClickTimer();
         observer?.disconnect();
-        if (slowTimer) window.clearTimeout(slowTimer);
+        if (slowTimer.current) window.clearTimeout(slowTimer.current);
         if (retryTimer.current) clearTimeout(retryTimer.current);
       };
     }, []);
@@ -1818,13 +2120,13 @@
         "aria-label": t(lang, "previewCover", { title: item.title }),
         title: t(lang, "previewCover", { title: item.title })
       },
-      hasCover ? /* @__PURE__ */ Spicetify.React.createElement(
+      hasCover && !coverSrc ? /* @__PURE__ */ Spicetify.React.createElement("div", { className: "otd-cover-skeleton", "aria-hidden": "true" }) : hasCover ? /* @__PURE__ */ Spicetify.React.createElement(
         "img",
         {
           className: "otd-cover",
-          src: coverSrc,
+          src: coverSrc ?? void 0,
           alt: t(lang, "coverAlt", { title: item.title }),
-          loading: "lazy",
+          loading: srcKind.current === "caa" ? "lazy" : "eager",
           decoding: "async",
           onLoad: () => {
             loaded.current = true;
@@ -1853,7 +2155,7 @@
   var SPOTIFY_ID = /^[A-Za-z0-9]{22}$/;
   var MIN_AMBIGUOUS_POPULARITY = 20;
   var store2 = null;
-  var persistTimer2;
+  var persistTimer3;
   var inflight4 = /* @__PURE__ */ new Map();
   function loadStore2() {
     if (store2) return store2;
@@ -1865,18 +2167,18 @@
     }
     return store2;
   }
-  function persistSoon2() {
-    if (persistTimer2 !== void 0) return;
-    persistTimer2 = window.setTimeout(() => {
-      persistTimer2 = void 0;
-      const current = loadStore2();
-      const keys = Object.keys(current);
+  function persistSoon3() {
+    if (persistTimer3 !== void 0) return;
+    persistTimer3 = window.setTimeout(() => {
+      persistTimer3 = void 0;
+      const current2 = loadStore2();
+      const keys = Object.keys(current2);
       if (keys.length > MAX_ENTRIES2) {
-        keys.sort((a, b) => current[a].at - current[b].at);
-        for (const key of keys.slice(0, keys.length - MAX_ENTRIES2)) delete current[key];
+        keys.sort((a, b) => current2[a].at - current2[b].at);
+        for (const key of keys.slice(0, keys.length - MAX_ENTRIES2)) delete current2[key];
       }
       try {
-        localStorage.setItem(STORAGE_KEY2, JSON.stringify(current));
+        localStorage.setItem(STORAGE_KEY2, JSON.stringify(current2));
       } catch {
       }
     }, 1500);
@@ -1893,7 +2195,7 @@
   }
   function writeEntry2(mbid, profile) {
     loadStore2()[mbid] = { id: profile.spotifyId, url: profile.photoUrl, at: Date.now() };
-    persistSoon2();
+    persistSoon3();
   }
   function toProfile(entry) {
     return {
@@ -2055,6 +2357,7 @@
         type: "button",
         className: "otd-artist-photo",
         onClick: () => {
+          beforeLeavingApp();
           void openArtistInSpotify(artist);
         },
         onMouseEnter: () => {
@@ -2089,6 +2392,7 @@
   var ARTISTS_PER_EXPANSION = 24;
   function BirthdaysView({
     lang,
+    dayKey,
     status,
     artists,
     totalBeforeFilters,
@@ -2099,7 +2403,15 @@
     errorMessage,
     onRetry
   }) {
-    const [visibleCount, setVisibleCount] = useState(INITIAL_ARTISTS);
+    const expandedKey = `b:${dayKey}`;
+    const [visibleCount, setVisibleCountState] = useState(() => getExpanded(expandedKey, INITIAL_ARTISTS));
+    const setVisibleCount = (next) => {
+      setVisibleCountState((count) => {
+        const value = typeof next === "function" ? next(count) : next;
+        setExpanded(expandedKey, value, INITIAL_ARTISTS);
+        return value;
+      });
+    };
     if (status === "loading") {
       return /* @__PURE__ */ Spicetify.React.createElement("p", { className: "otd-empty" }, t(lang, "loadingBirthdays", { date: dateLabel }));
     }
@@ -2203,13 +2515,13 @@
     const counter = useRef(0);
     const [layers, setLayers] = useState(() => [{ n: 0, url, kind }]);
     useEffect(() => {
-      setLayers((current) => {
-        const top = current[current.length - 1];
-        if (top.url === url) return current;
+      setLayers((current2) => {
+        const top = current2[current2.length - 1];
+        if (top.url === url) return current2;
         counter.current += 1;
         return [top, { n: counter.current, url, kind }];
       });
-      const timer = window.setTimeout(() => setLayers((current) => current.slice(-1)), FADE_MS + 250);
+      const timer = window.setTimeout(() => setLayers((current2) => current2.slice(-1)), FADE_MS + 250);
       return () => window.clearTimeout(timer);
     }, [url]);
     return /* @__PURE__ */ Spicetify.React.createElement(Spicetify.React.Fragment, null, layers.map((layer, index) => /* @__PURE__ */ Spicetify.React.createElement(
@@ -2336,20 +2648,20 @@
       };
     }, [candidatesKey]);
     tickRef.current = () => {
-      const current = slotsRef.current;
-      if (!current.length || document.visibilityState === "hidden") return;
+      const current2 = slotsRef.current;
+      if (!current2.length || document.visibilityState === "hidden") return;
       const gen = generation.current;
       tickCount.current += 1;
       const now = tickCount.current;
-      const shown = new Set(current.map((slot) => slot.key));
+      const shown = new Set(current2.map((slot) => slot.key));
       const reserve = [];
       states.current.forEach((state, index) => {
         const artist = artists.current[index];
         if (state === "ready" && artist && !shown.has(artist.key)) reserve.push(artist);
       });
       reserve.sort((a, b) => (lastShown.current.get(a.key) ?? -1) - (lastShown.current.get(b.key) ?? -1));
-      const next = current.slice();
-      const length = current.length;
+      const next = current2.slice();
+      const length = current2.length;
       const start = cursor.current % length;
       const updates = Math.min(2, length);
       const used = /* @__PURE__ */ new Set();
@@ -2457,8 +2769,16 @@
   function BackIcon({ size = 14 }) {
     return /* @__PURE__ */ Spicetify.React.createElement("svg", { viewBox: "0 0 24 24", width: size, height: size, fill: "none", stroke: "currentColor", strokeWidth: "2.2", strokeLinecap: "round", strokeLinejoin: "round", "aria-hidden": "true" }, /* @__PURE__ */ Spicetify.React.createElement("path", { d: "M19 12H5M11 6l-6 6 6 6" }));
   }
-  var AnniversarySection = memo(function AnniversarySection2({ year, items, currentYear, lang, sectionRef, onPreview }) {
-    const [visibleCount, setVisibleCount] = useState(INITIAL_ALBUMS_PER_YEAR);
+  var AnniversarySection = memo(function AnniversarySection2({ year, items, currentYear, lang, dayKey, sectionRef, onPreview }) {
+    const expandedKey = `a:${dayKey}:${year}`;
+    const [visibleCount, setVisibleCountState] = useState(() => getExpanded(expandedKey, INITIAL_ALBUMS_PER_YEAR));
+    const setVisibleCount = (next) => {
+      setVisibleCountState((count) => {
+        const value = typeof next === "function" ? next(count) : next;
+        setExpanded(expandedKey, value, INITIAL_ALBUMS_PER_YEAR);
+        return value;
+      });
+    };
     const visibleItems = items.slice(0, visibleCount);
     const anniversaryAge = currentYear - year;
     const isOne = anniversaryAge === 1;
@@ -2477,8 +2797,13 @@
     const [dayError, setDayError] = useState(null);
     const [retryNonce, setRetryNonce] = useState(0);
     const [today, setToday] = useState(() => /* @__PURE__ */ new Date());
-    const [dayOffset, setDayOffset] = useState(0);
-    const [tab, setTab] = useState("albums");
+    const initialView = useMemo(() => {
+      const saved = getViewState();
+      return { dayOffset: Math.min(saved.dayOffset, MAX_DAYS_BACK), tab: saved.tab, scroll: { ...saved.scroll } };
+    }, []);
+    const [dayOffset, setDayOffset] = useState(initialView.dayOffset);
+    const [tab, setTab] = useState(initialView.tab);
+    const [artistsVisited, setArtistsVisited] = useState(initialView.tab === "artists");
     const [birthdays, setBirthdays] = useState(null);
     const [birthdaysError, setBirthdaysError] = useState(null);
     const [birthdaysNonce, setBirthdaysNonce] = useState(0);
@@ -2548,6 +2873,7 @@
           setCatalog(null);
           setDayError(null);
           setDayOffset(0);
+          setViewDayOffset(0);
           setToday(/* @__PURE__ */ new Date());
         },
         Math.max(0, nextMidnight.getTime() - Date.now())
@@ -2556,7 +2882,7 @@
     }, [today]);
     useEffect(() => {
       let cancelled = false;
-      setDayError((current) => current?.monthDay === monthDay ? null : current);
+      setDayError((current2) => current2?.monthDay === monthDay ? null : current2);
       loadDailyCatalog(monthDay).then((loaded) => {
         if (!cancelled) setCatalog({ monthDay, items: loaded.items });
       }).catch((loadError) => {
@@ -2569,7 +2895,7 @@
     useEffect(() => {
       if (tab !== "artists") return;
       let cancelled = false;
-      setBirthdaysError((current) => current?.monthDay === monthDay ? null : current);
+      setBirthdaysError((current2) => current2?.monthDay === monthDay ? null : current2);
       loadBirthdays(monthDay, birthdaysNonce > 0).then((loaded) => {
         if (!cancelled) setBirthdays({ monthDay, items: loaded.items });
       }).catch((loadError) => {
@@ -2584,19 +2910,33 @@
         cancelled = true;
       };
     }, [tab, monthDay, birthdaysNonce]);
+    function changeDay(next) {
+      if (next === dayOffset) return;
+      pendingRestore.current = 0;
+      setViewDayOffset(next);
+      setDayOffset(next);
+    }
     function goToPreviousDay() {
-      setDayOffset((current) => Math.min(current + 1, MAX_DAYS_BACK));
+      changeDay(Math.min(dayOffset + 1, MAX_DAYS_BACK));
     }
     function goToNextDay() {
-      setDayOffset((current) => Math.max(current - 1, 0));
+      changeDay(Math.max(dayOffset - 1, 0));
     }
     function goToToday() {
-      setDayOffset(0);
+      changeDay(0);
+    }
+    function selectTab(next) {
+      if (next === tab) return;
+      captureScrollNow();
+      pendingRestore.current = getSavedScroll(next);
+      if (next === "artists") setArtistsVisited(true);
+      setViewTab(next);
+      setTab(next);
     }
     const openPreview = useCallback((item, cover) => setPreview({ item, cover }), []);
     function ensureFollowed(force = false) {
       const id = ++followRequest.current;
-      setFollowStatus((current) => current === "ready" ? current : "loading");
+      setFollowStatus((current2) => current2 === "ready" ? current2 : "loading");
       loadFollowedArtists(force).then((result) => {
         if (id !== followRequest.current) return;
         setFollowedSet(new Set(result.names.map(normalizeArtistName)));
@@ -2608,12 +2948,12 @@
     }
     const followRefreshed = useRef(false);
     useEffect(() => {
-      if (!onlyFollowed) return;
+      if (!onlyFollowedAlbums && !onlyFollowedBirthdays) return;
       if (followStatus === "idle" || !followRefreshed.current) {
         followRefreshed.current = true;
         ensureFollowed();
       }
-    }, [tab, onlyFollowed]);
+    }, [onlyFollowedAlbums, onlyFollowedBirthdays]);
     useEffect(() => () => {
       followRequest.current += 1;
     }, []);
@@ -2639,8 +2979,8 @@
       if (next && followStatus !== "ready") ensureFollowed();
     }
     function toggleYearOrder() {
-      setYearOrder((current) => {
-        const next = current === "desc" ? "asc" : "desc";
+      setYearOrder((current2) => {
+        const next = current2 === "desc" ? "asc" : "desc";
         try {
           localStorage.setItem(YEAR_ORDER_KEY, next);
         } catch {
@@ -2658,13 +2998,13 @@
       );
     }, [items, monthDay, currentYear]);
     const displayedItems = useMemo(() => {
-      if (!onlyFollowed) return anniversaryItems;
+      if (!onlyFollowedAlbums) return anniversaryItems;
       if (followStatus === "error") return anniversaryItems;
       if (followStatus !== "ready" || !followedSet) return [];
       return anniversaryItems.filter(
         (item) => artistIsFollowed(followedSet, item.artistNames?.length ? item.artistNames : [item.artistName])
       );
-    }, [anniversaryItems, onlyFollowed, followStatus, followedSet]);
+    }, [anniversaryItems, onlyFollowedAlbums, followStatus, followedSet]);
     const genreFilteredItems = useMemo(() => {
       if (!selectedGenres.length) return displayedItems;
       const selected = new Set(selectedGenres);
@@ -2704,7 +3044,7 @@
     const birthdaysStatus = birthdaysErr ? birthdaysErr.missing ? "missing" : "error" : birthdays?.monthDay === monthDay ? "ready" : "loading";
     const displayedBirthdays = useMemo(() => {
       let list = birthdayItemsAll;
-      if (onlyFollowed && followStatus !== "error") {
+      if (onlyFollowedBirthdays && followStatus !== "error") {
         if (followStatus !== "ready" || !followedSet) return NO_BIRTHDAYS;
         list = list.filter((artist) => artistIsFollowed(followedSet, [artist.name]));
       }
@@ -2713,7 +3053,7 @@
         list = list.filter((artist) => classifyMainGenres(artist.genres).some((genre) => selected.has(genre)));
       }
       return list;
-    }, [birthdayItemsAll, onlyFollowed, followStatus, followedSet, selectedGenres]);
+    }, [birthdayItemsAll, onlyFollowedBirthdays, followStatus, followedSet, selectedGenres]);
     const backgroundCandidates = useMemo(
       () => selectBackgroundCandidates(genreFilteredItems),
       [genreFilteredItems]
@@ -2755,16 +3095,16 @@
       const update = (event) => {
         frame = 0;
         const threshold = window.innerHeight * 0.3;
-        let current = availableYears[0];
+        let current2 = availableYears[0];
         for (const year of availableYears) {
           const el = yearSectionRefs.current.get(year);
-          if (el && el.getBoundingClientRect().top <= threshold) current = year;
+          if (el && el.getBoundingClientRect().top <= threshold) current2 = year;
         }
         const target = event?.target;
         if (target && typeof target.scrollTop === "number" && target.scrollTop > 0 && target.scrollTop + target.clientHeight >= target.scrollHeight - 4) {
-          current = availableYears[availableYears.length - 1];
+          current2 = availableYears[availableYears.length - 1];
         }
-        setActiveYear(current);
+        setActiveYear(current2);
       };
       const onScroll = (event) => {
         if (!frame) frame = window.requestAnimationFrame(() => update(event));
@@ -2776,7 +3116,105 @@
         if (frame) window.cancelAnimationFrame(frame);
       };
     }, [availableYears.join(",")]);
+    const pageRef = useRef(null);
+    const tabRef = useRef(tab);
+    tabRef.current = tab;
+    const userIntentAt = useRef(0);
+    const pointerDown = useRef(false);
+    const restoring = useRef(false);
+    const pendingRestore = useRef(initialView.scroll[initialView.tab] > 0 ? initialView.scroll[initialView.tab] : null);
+    function captureScrollNow() {
+      const scroller = findScroller(pageRef.current);
+      if (scroller && !restoring.current) saveScroll(tabRef.current, scroller.scrollTop);
+    }
+    useEffect(() => {
+      const mark = () => {
+        userIntentAt.current = Date.now();
+      };
+      const down = () => {
+        pointerDown.current = true;
+        mark();
+      };
+      const up = () => {
+        pointerDown.current = false;
+      };
+      const onScroll = (event) => {
+        const scroller = event.target;
+        const page = pageRef.current;
+        if (restoring.current || !page || !(scroller instanceof HTMLElement) || !scroller.contains(page)) return;
+        if (!pointerDown.current && Date.now() - userIntentAt.current > 1500) return;
+        saveScroll(tabRef.current, scroller.scrollTop);
+      };
+      const options = { capture: true, passive: true };
+      for (const name of ["wheel", "touchstart", "keydown"]) window.addEventListener(name, mark, options);
+      window.addEventListener("pointerdown", down, options);
+      window.addEventListener("pointerup", up, options);
+      window.addEventListener("pointercancel", up, options);
+      window.addEventListener("scroll", onScroll, options);
+      registerScrollCapture(captureScrollNow);
+      return () => {
+        for (const name of ["wheel", "touchstart", "keydown"]) window.removeEventListener(name, mark, options);
+        window.removeEventListener("pointerdown", down, options);
+        window.removeEventListener("pointerup", up, options);
+        window.removeEventListener("pointercancel", up, options);
+        window.removeEventListener("scroll", onScroll, options);
+        registerScrollCapture(null);
+      };
+    }, []);
+    const contentReady = tab === "albums" ? !dayLoading && !error && !(onlyFollowedAlbums && followStatus === "loading") : birthdaysStatus === "ready" && !(onlyFollowedBirthdays && followStatus === "loading");
+    useEffect(() => {
+      const target = pendingRestore.current;
+      if (target === null || !contentReady) return;
+      pendingRestore.current = null;
+      restoring.current = true;
+      let frame = 0;
+      let tries = 0;
+      let stable = 0;
+      const finish = () => {
+        window.cancelAnimationFrame(frame);
+        restoring.current = false;
+        for (const name of ["wheel", "touchstart", "keydown"]) window.removeEventListener(name, abort, true);
+      };
+      const abort = () => {
+        finish();
+      };
+      for (const name of ["wheel", "touchstart", "keydown"]) window.addEventListener(name, abort, true);
+      const step = () => {
+        const scroller = findScroller(pageRef.current);
+        if (scroller) {
+          if (Math.abs(scroller.scrollTop - target) > 2) {
+            stable = 0;
+            scroller.scrollTop = target;
+          } else {
+            stable += 1;
+          }
+        }
+        tries += 1;
+        if (stable >= 4 || tries > 180) {
+          finish();
+          return;
+        }
+        frame = window.requestAnimationFrame(step);
+      };
+      frame = window.requestAnimationFrame(step);
+      return finish;
+    }, [contentReady, tab, monthDay]);
+    useEffect(() => {
+      if (!anniversaryItems.length) return;
+      const seen = /* @__PURE__ */ new Set();
+      const order = [];
+      const push = (item) => {
+        if (!seen.has(item.mbid)) {
+          seen.add(item.mbid);
+          order.push(item.mbid);
+        }
+      };
+      for (const [, list] of orderedGroups) for (const item of list.slice(0, INITIAL_ALBUMS_PER_YEAR)) push(item);
+      for (const item of anniversaryItems) push(item);
+      prefetchCovers(order.slice(0, 120));
+    }, [anniversaryItems, orderedGroups]);
     function scrollToYear(year) {
+      userIntentAt.current = Date.now();
       const el = yearSectionRefs.current.get(year);
       if (el) {
         el.scrollIntoView({ behavior: "smooth", block: "start" });
@@ -2884,9 +3322,9 @@
         setTooltip(null);
         if (tooltipTimer.current) clearTimeout(tooltipTimer.current);
         scheduleNavHide();
-      } }, /* @__PURE__ */ Spicetify.React.createElement("section", { className: "otd-shell" }, /* @__PURE__ */ Spicetify.React.createElement("p", { className: "otd-eyebrow" }, t(lang, "eyebrow")), /* @__PURE__ */ Spicetify.React.createElement("h1", null, t(lang, "errorTitle")), /* @__PURE__ */ Spicetify.React.createElement("p", { className: "otd-message" }, t(lang, "errorMsg", { date: dateLabel })), /* @__PURE__ */ Spicetify.React.createElement("pre", { className: "otd-error" }, error), /* @__PURE__ */ Spicetify.React.createElement("button", { type: "button", className: "otd-retry-btn", onClick: () => setRetryNonce((current) => current + 1) }, t(lang, "retry")), /* @__PURE__ */ Spicetify.React.createElement("p", { className: "otd-hint" }, t(lang, "errorHint"))));
+      } }, /* @__PURE__ */ Spicetify.React.createElement("section", { className: "otd-shell" }, /* @__PURE__ */ Spicetify.React.createElement("p", { className: "otd-eyebrow" }, t(lang, "eyebrow")), /* @__PURE__ */ Spicetify.React.createElement("h1", null, t(lang, "errorTitle")), /* @__PURE__ */ Spicetify.React.createElement("p", { className: "otd-message" }, t(lang, "errorMsg", { date: dateLabel })), /* @__PURE__ */ Spicetify.React.createElement("pre", { className: "otd-error" }, error), /* @__PURE__ */ Spicetify.React.createElement("button", { type: "button", className: "otd-retry-btn", onClick: () => setRetryNonce((current2) => current2 + 1) }, t(lang, "retry")), /* @__PURE__ */ Spicetify.React.createElement("p", { className: "otd-hint" }, t(lang, "errorHint"))));
     }
-    return /* @__PURE__ */ Spicetify.React.createElement("main", { className: "otd-page", onMouseMove: handlePageMouseMove, onMouseLeave: () => {
+    return /* @__PURE__ */ Spicetify.React.createElement("main", { ref: pageRef, className: "otd-page", onMouseMove: handlePageMouseMove, onMouseLeave: () => {
       setTooltip(null);
       if (tooltipTimer.current) clearTimeout(tooltipTimer.current);
       scheduleNavHide();
@@ -2912,14 +3350,14 @@
       /* @__PURE__ */ Spicetify.React.createElement("span", { className: "otd-settings-code" }, lang.toUpperCase()),
       /* @__PURE__ */ Spicetify.React.createElement(ChevronIcon, { size: 13 })
     ), settingsOpen && /* @__PURE__ */ Spicetify.React.createElement("div", { className: "otd-settings-menu", role: "listbox" }, /* @__PURE__ */ Spicetify.React.createElement("p", { className: "otd-settings-title" }, t(lang, "changeLanguage")), /* @__PURE__ */ Spicetify.React.createElement("div", { className: "otd-settings-options" }, Object.entries(LANGUAGES).map(([code, info]) => {
-      const active = code === lang;
+      const active2 = code === lang;
       return /* @__PURE__ */ Spicetify.React.createElement(
         "button",
         {
           key: code,
           role: "option",
-          "aria-selected": active,
-          className: `otd-settings-option${active ? " is-active" : ""}`,
+          "aria-selected": active2,
+          className: `otd-settings-option${active2 ? " is-active" : ""}`,
           onClick: () => {
             setLang(code);
             setLangState(code);
@@ -2928,7 +3366,7 @@
         },
         /* @__PURE__ */ Spicetify.React.createElement("span", { className: "otd-settings-badge" }, code.toUpperCase()),
         /* @__PURE__ */ Spicetify.React.createElement("span", { className: "otd-settings-name" }, info.native),
-        active && /* @__PURE__ */ Spicetify.React.createElement("span", { className: "otd-settings-check" }, /* @__PURE__ */ Spicetify.React.createElement(CheckIcon, { size: 14 }))
+        active2 && /* @__PURE__ */ Spicetify.React.createElement("span", { className: "otd-settings-check" }, /* @__PURE__ */ Spicetify.React.createElement(CheckIcon, { size: 14 }))
       );
     })))), /* @__PURE__ */ Spicetify.React.createElement("div", { className: "otd-day-nav" }, /* @__PURE__ */ Spicetify.React.createElement(
       "button",
@@ -2969,7 +3407,7 @@
         id: `otd-tab-${id}`,
         "aria-selected": tab === id,
         className: `otd-tab${tab === id ? " is-active" : ""}`,
-        onClick: () => setTab(id)
+        onClick: () => selectTab(id)
       },
       t(lang, id === "albums" ? "tabAlbums" : "tabArtists")
     ))), /* @__PURE__ */ Spicetify.React.createElement("div", { className: "otd-genre-filter" }, /* @__PURE__ */ Spicetify.React.createElement(
@@ -3015,32 +3453,33 @@
           className: `otd-genre-chip${checked ? " is-selected" : ""}${disabled ? " is-disabled" : ""}`,
           disabled,
           onClick: () => {
-            setSelectedGenres((current) => {
-              if (checked) return current.filter((id) => id !== genre.id);
-              if (current.length < MAX_SELECTED_GENRES) return [...current, genre.id];
-              return current;
+            setSelectedGenres((current2) => {
+              if (checked) return current2.filter((id) => id !== genre.id);
+              if (current2.length < MAX_SELECTED_GENRES) return [...current2, genre.id];
+              return current2;
             });
           }
         },
         /* @__PURE__ */ Spicetify.React.createElement("span", { className: "otd-genre-chip-check" }, checked ? "✓" : ""),
         /* @__PURE__ */ Spicetify.React.createElement("span", null, genre.label)
       );
-    })), selectedGenres.length === MAX_SELECTED_GENRES && /* @__PURE__ */ Spicetify.React.createElement("p", { className: "otd-genre-limit" }, t(lang, "limitReached"))))), tab === "artists" ? onlyFollowed && followStatus === "loading" ? /* @__PURE__ */ Spicetify.React.createElement("p", { className: "otd-empty" }, t(lang, "loadingFollowed")) : /* @__PURE__ */ Spicetify.React.createElement(
+    })), selectedGenres.length === MAX_SELECTED_GENRES && /* @__PURE__ */ Spicetify.React.createElement("p", { className: "otd-genre-limit" }, t(lang, "limitReached"))))), artistsVisited && /* @__PURE__ */ Spicetify.React.createElement("div", { className: "otd-tab-panel", hidden: tab !== "artists" }, onlyFollowedBirthdays && followStatus === "loading" ? /* @__PURE__ */ Spicetify.React.createElement("p", { className: "otd-empty" }, t(lang, "loadingFollowed")) : /* @__PURE__ */ Spicetify.React.createElement(
       BirthdaysView,
       {
         key: monthDay,
+        dayKey: monthDay,
         lang,
         status: birthdaysStatus,
         artists: displayedBirthdays,
         totalBeforeFilters: birthdayItemsAll.length,
         hasGenreFilter: selectedGenres.length > 0,
-        onlyFollowedActive: onlyFollowed && followStatus === "ready",
+        onlyFollowedActive: onlyFollowedBirthdays && followStatus === "ready",
         dateLabel: dateLabelShort,
         viewYear: currentYear,
         errorMessage: birthdaysErr?.message ?? "",
-        onRetry: () => setBirthdaysNonce((current) => current + 1)
+        onRetry: () => setBirthdaysNonce((current2) => current2 + 1)
       }
-    ) : dayLoading ? /* @__PURE__ */ Spicetify.React.createElement("p", { className: "otd-empty" }, t(lang, "loading", { date: dateLabel })) : error ? /* @__PURE__ */ Spicetify.React.createElement("div", { className: "otd-empty" }, /* @__PURE__ */ Spicetify.React.createElement("p", null, t(lang, "errorMsg", { date: dateLabel })), /* @__PURE__ */ Spicetify.React.createElement("pre", { className: "otd-error" }, error), /* @__PURE__ */ Spicetify.React.createElement("button", { type: "button", className: "otd-retry-btn", onClick: () => setRetryNonce((current) => current + 1) }, t(lang, "retry"))) : onlyFollowed && followStatus === "loading" ? /* @__PURE__ */ Spicetify.React.createElement("p", { className: "otd-empty" }, t(lang, "loadingFollowed")) : anniversaryGroups.size ? orderedGroups.map(([year, yearItems]) => /* @__PURE__ */ Spicetify.React.createElement(
+    )), /* @__PURE__ */ Spicetify.React.createElement("div", { className: "otd-tab-panel", hidden: tab !== "albums" }, dayLoading ? /* @__PURE__ */ Spicetify.React.createElement("p", { className: "otd-empty" }, t(lang, "loading", { date: dateLabel })) : error ? /* @__PURE__ */ Spicetify.React.createElement("div", { className: "otd-empty" }, /* @__PURE__ */ Spicetify.React.createElement("p", null, t(lang, "errorMsg", { date: dateLabel })), /* @__PURE__ */ Spicetify.React.createElement("pre", { className: "otd-error" }, error), /* @__PURE__ */ Spicetify.React.createElement("button", { type: "button", className: "otd-retry-btn", onClick: () => setRetryNonce((current2) => current2 + 1) }, t(lang, "retry"))) : onlyFollowedAlbums && followStatus === "loading" ? /* @__PURE__ */ Spicetify.React.createElement("p", { className: "otd-empty" }, t(lang, "loadingFollowed")) : anniversaryGroups.size ? orderedGroups.map(([year, yearItems]) => /* @__PURE__ */ Spicetify.React.createElement(
       AnniversarySection,
       {
         key: year,
@@ -3048,10 +3487,11 @@
         items: yearItems,
         currentYear,
         lang,
+        dayKey: monthDay,
         onPreview: openPreview,
         sectionRef: getSectionRef(year)
       }
-    )) : /* @__PURE__ */ Spicetify.React.createElement("p", { className: "otd-empty" }, selectedGenres.length > 0 ? !items.some((item) => item.genres?.length) ? t(lang, "emptyGenresMsg") : t(lang, "emptyNoMatch") : onlyFollowed && followStatus === "ready" ? t(lang, "followedEmpty") : t(lang, "emptyNone")), /* @__PURE__ */ Spicetify.React.createElement("p", { className: "otd-attribution" }, t(lang, tab === "albums" ? "attribution" : "attributionBirthdays"))), preview && createPortal(
+    )) : /* @__PURE__ */ Spicetify.React.createElement("p", { className: "otd-empty" }, selectedGenres.length > 0 ? !items.some((item) => item.genres?.length) ? t(lang, "emptyGenresMsg") : t(lang, "emptyNoMatch") : onlyFollowedAlbums && followStatus === "ready" ? t(lang, "followedEmpty") : t(lang, "emptyNone"))), /* @__PURE__ */ Spicetify.React.createElement("p", { className: "otd-attribution" }, t(lang, tab === "albums" ? "attribution" : "attributionBirthdays"))), preview && createPortal(
       /* @__PURE__ */ Spicetify.React.createElement(
         "div",
         {
@@ -3084,7 +3524,7 @@
             {
               src: preview.cover.replace("/front-250", "/front-500"),
               alt: t(lang, "coverAlt", { title: preview.item.title }),
-              onError: () => setPreview((current) => current ? { ...current, cover: null } : null)
+              onError: () => setPreview((current2) => current2 ? { ...current2, cover: null } : null)
             }
           ) : /* @__PURE__ */ Spicetify.React.createElement("div", { className: "otd-cover-placeholder", "aria-hidden": "true" }, "♫")),
           /* @__PURE__ */ Spicetify.React.createElement("h2", null, preview.item.title),
