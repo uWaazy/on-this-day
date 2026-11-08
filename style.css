@@ -250,6 +250,100 @@
   background: rgba(30,215,96,.12);
 }
 
+.otd-explicit-pill {
+  display: inline-grid;
+  place-items: center;
+  width: 17px;
+  height: 17px;
+  border-radius: 4px;
+  font-size: 10px;
+  font-weight: 900;
+  line-height: 1;
+  letter-spacing: 0;
+}
+
+.otd-explicit-pill.is-explicit,
+.otd-settings-badge.is-explicit {
+  background: rgba(255,255,255,.22);
+  color: #fff;
+}
+
+.otd-explicit-pill.is-clean {
+  background: rgba(30,215,96,.22);
+  color: var(--otd-accent);
+}
+
+.otd-version-menu,
+.otd-settings-panel {
+  width: 286px;
+}
+
+.otd-settings-section {
+  display: flex;
+  flex-direction: column;
+}
+
+.otd-settings-divider {
+  height: 1px;
+  margin: 10px 4px;
+  background: rgba(255,255,255,.09);
+}
+
+.otd-settings-lang-pill {
+  display: inline-grid;
+  place-items: center;
+  height: 17px;
+  padding: 0 5px;
+  border-radius: 4px;
+  background: rgba(255,255,255,.11);
+  color: var(--otd-text-secondary);
+  font-size: 9.5px;
+  font-weight: 800;
+  letter-spacing: .04em;
+}
+
+.otd-sort-wrap {
+  position: relative;
+}
+
+.otd-sort-trigger {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.otd-sort-menu {
+  left: 0;
+  right: auto;
+  width: 256px;
+}
+
+.otd-settings-name--stack {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.otd-settings-option-label {
+  font-size: 13px;
+  font-weight: 700;
+  line-height: 1.2;
+}
+
+.otd-settings-option-desc {
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--otd-text-muted);
+  line-height: 1.25;
+}
+
+.otd-settings-hint {
+  margin: 8px 4px 0;
+  color: var(--otd-text-muted);
+  font-size: 11px;
+  line-height: 1.35;
+}
+
 .otd-eyebrow {
   margin: 0 0 8px;
   padding-top: 6px;
@@ -697,10 +791,48 @@
   text-align: left;
 }
 
-.otd-open-spotify {
+.otd-cover-actions {
   position: absolute;
-  bottom: 10px;
-  right: 10px;
+  bottom: 9px;
+  right: 9px;
+  z-index: 2;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  opacity: 0;
+  transform: translateY(6px);
+  transition: opacity .2s ease, transform .2s ease;
+  pointer-events: none;
+}
+
+.otd-album-card:hover .otd-cover-actions,
+.otd-album-card:focus-within .otd-cover-actions {
+  opacity: 1;
+  transform: translateY(0);
+  pointer-events: auto;
+}
+
+.otd-play-album {
+  display: inline-grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  color: #06130b;
+  background: var(--otd-accent);
+  box-shadow: 0 4px 12px rgba(0,0,0,.45);
+  cursor: pointer;
+  transition: transform .15s ease, background .15s ease;
+}
+
+.otd-play-album:hover {
+  background: #3be477;
+  transform: scale(1.08);
+}
+
+.otd-open-spotify {
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -710,40 +842,23 @@
   border-radius: var(--otd-radius-pill);
   color: #111;
   background: #fff;
+  box-shadow: 0 4px 12px rgba(0,0,0,.4);
   font-size: 11px;
   font-weight: 700;
   cursor: pointer;
-  opacity: 0;
-  transform: translateY(6px);
-  transition: all .2s ease;
-  pointer-events: none;
-}
-
-.otd-album-card:hover .otd-open-spotify {
-  opacity: 1;
-  transform: translateY(0);
-  pointer-events: auto;
-}
-
-.otd-album-card:focus-within .otd-open-spotify {
-  opacity: 1;
-  transform: translateY(0);
-  pointer-events: auto;
+  transition: background .15s ease, transform .15s ease;
 }
 
 .otd-open-spotify:hover {
   background: #e6e6e6;
-}
-
-.otd-album-card > .otd-open-spotify {
-  z-index: 2;
+  transform: scale(1.03);
 }
 
 /* Notas: usuários (verde) e críticos (azul). Dado indisponível tem estado próprio, nunca "0". */
 .otd-scores {
   display: grid;
   grid-template-columns: 1fr 1fr;
-  gap: 10px;
+  gap: 8px;
   margin: 2px 9px 9px;
   padding-top: 8px;
   border-top: 1px solid rgba(255,255,255,.07);
@@ -761,9 +876,10 @@
 
 .otd-score-top {
   display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-  gap: 2px;
+  flex-direction: row;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 4px;
   min-width: 0;
 }
 
@@ -772,15 +888,15 @@
   text-overflow: ellipsis;
   white-space: nowrap;
   color: var(--otd-text-secondary);
-  font-size: 10px;
+  font-size: 9.5px;
   font-weight: 700;
-  letter-spacing: .04em;
+  letter-spacing: .03em;
   max-width: 100%;
 }
 
 .otd-score-value {
   color: var(--otd-score-color);
-  font-size: 20px;
+  font-size: 15px;
   font-weight: 800;
   line-height: 1;
   font-variant-numeric: tabular-nums;
@@ -914,6 +1030,51 @@
   margin: 6px 0 0;
   color: var(--otd-text-secondary);
   font-size: 13px;
+}
+
+.otd-cover-preview-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 10px;
+  margin-top: 16px;
+}
+
+.otd-preview-play-btn,
+.otd-preview-open-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 38px;
+  padding: 0 18px;
+  border-radius: var(--otd-radius-pill);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 800;
+  cursor: pointer;
+  transition: transform .15s ease, background .15s ease, border-color .15s ease;
+}
+
+.otd-preview-play-btn {
+  border: 0;
+  color: #06130b;
+  background: var(--otd-accent);
+}
+
+.otd-preview-play-btn:hover {
+  background: #3be477;
+  transform: scale(1.03);
+}
+
+.otd-preview-open-btn {
+  border: 1px solid rgba(255,255,255,.18);
+  color: var(--otd-text);
+  background: rgba(255,255,255,.08);
+}
+
+.otd-preview-open-btn:hover {
+  background: rgba(255,255,255,.15);
+  border-color: rgba(255,255,255,.32);
 }
 
 .otd-year-nav {

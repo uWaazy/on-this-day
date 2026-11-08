@@ -65,6 +65,15 @@ try {
 }
 
 const SPOTIFY_ARTIST = /open\.spotify\.com\/(?:intl-[a-z-]+\/)?artist\/([A-Za-z0-9]{22})/;
+const NON_ARTIST = /^(various artists?|unknown( artist)?|\[?no artist\]?|\[?anonymous\]?|\[?traditional\]?|\[?unknown\]?|\[?data\]?|special purpose.*)$/i;
+
+function hasValidArtistName(value) {
+  if (typeof value !== "string") return false;
+  const trimmed = value.trim();
+  if (!trimmed || NON_ARTIST.test(trimmed)) return false;
+  const norm = trimmed.normalize("NFKD").replace(/[\u0300-\u036f]/g, "").replace(/[^\p{L}\p{N}]+/gu, "");
+  return Boolean(norm && (/\p{L}/u.test(norm) || norm.length >= 2));
+}
 
 function isRealDate(year, month, day) {
   const date = new Date(Date.UTC(year, month - 1, day));
@@ -84,7 +93,7 @@ function spotifyIdOf(row) {
 
 /** Converte uma linha do dump em um aniversariante, ou null quando não serve. */
 function toBirthday(row) {
-  if (!row || row.type !== "Person" || typeof row.id !== "string" || typeof row.name !== "string") return null;
+  if (!row || row.type !== "Person" || typeof row.id !== "string" || !hasValidArtistName(row.name)) return null;
 
   const span = row["life-span"];
   const born = span?.begin;

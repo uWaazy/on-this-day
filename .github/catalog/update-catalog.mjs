@@ -129,9 +129,19 @@ async function inferSince() {
 }
 
 
+const NON_ARTIST = /^(various artists?|unknown( artist)?|\[?no artist\]?|\[?anonymous\]?|\[?traditional\]?|\[?unknown\]?|\[?data\]?|special purpose.*)$/i;
+
+function hasValidText(value, checkNonArtist = false) {
+  if (typeof value !== "string") return false;
+  const trimmed = value.trim();
+  if (!trimmed || (checkNonArtist && NON_ARTIST.test(trimmed))) return false;
+  const norm = trimmed.normalize("NFKD").replace(/[\u0300-\u036f]/g, "").replace(/[^\p{L}\p{N}]+/gu, "");
+  return Boolean(norm && (/\p{L}/u.test(norm) || norm.length >= 2));
+}
+
 function artistNamesOf(row) {
   const credits = Array.isArray(row["artist-credit"]) ? row["artist-credit"] : [];
-  return [...new Set(credits.map((credit) => (typeof credit?.artist?.name === "string" ? credit.artist.name : credit?.name)).filter((n) => typeof n === "string" && n))];
+  return [...new Set(credits.map((credit) => (typeof credit?.artist?.name === "string" ? credit.artist.name : credit?.name)).filter((n) => hasValidText(n, true)))];
 }
 
 function genresOf(row, fallbackTags) {
@@ -141,10 +151,10 @@ function genresOf(row, fallbackTags) {
   return [...new Set(tags)].slice(0, 8);
 }
 
-function toCatalogItem(searchRow, detail) {
+function toCatalogItem(searchRow, detail, critic) {
   const source = detail ?? searchRow;
   const artistNames = artistNamesOf(source).length ? artistNamesOf(source) : artistNamesOf(searchRow);
-  return {
+  const item = {
     mbid: searchRow.id,
     title: searchRow.title,
     artistName: artistNames[0] ?? "Unknown Artist",
@@ -154,6 +164,63 @@ function toCatalogItem(searchRow, detail) {
     ratingVotes: Number(detail?.rating?.["votes-count"] ?? 0),
     ratingValue: Number(detail?.rating?.value ?? 0),
   };
+  if (critic && typeof critic.value === "number" && critic.value > 0) {
+    item.criticScore = critic.value;
+    item.criticVotes = critic.count;
+  }
+  return item;
+}
+
+const LETTER_GRADES = { "A+": 97, A: 93, "A-": 90, "B+": 87, B: 83, "B-": 80, "C+": 77, C: 73, "C-": 70, "D+": 67, D: 63, "D-": 60, F: 42 };
+const XXL_GRADES = { XXL: 95, XL: 80, L: 65, M: 50, S: 35 };
+
+function parseWikiScoreToken(raw) {
+  const cleaned = String(raw ?? "").replace(/<ref[^>]*>[\s\S]*?<\/ref>/gi, " ").replace(/<ref[^>]*\/>/gi, " ").trim();
+  if (!cleaned) return null;
+  const tpl = /\{\{\s*(?:[Rr]ating|[Rr]ating-inline)\s*\|\s*([0-9.]+)\s*\|\s*([0-9.]+)/.exec(cleaned);
+  if (tpl && Number(tpl[2]) > 0) return Math.round((Number(tpl[1]) / Number(tpl[2])) * 100);
+  const ratio = /\b([0-9.]+)\s*\/\s*(100|10|5|4)\b/.exec(cleaned);
+  if (ratio && Number(ratio[2]) > 0) return Math.round((Number(ratio[1]) / Number(ratio[2])) * 100);
+  const plain = /^\s*([0-9]{2,3})\s*$/.exec(cleaned);
+  if (plain && Number(plain[1]) >= 15 && Number(plain[1]) <= 100) return Number(plain[1]);
+  const grade = cleaned.replace(/\{\{[^{}]*\}\}/g, "").replace(/'''|''/g, "").trim().toUpperCase();
+  return XXL_GRADES[grade] ?? LETTER_GRADES[grade] ?? null;
+}
+
+async function fetchWikiCriticScore(title, artistName) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 2500);
+  try {
+    const q = `${title} ${artistName} album`.replace(/["]+/g, " ").trim();
+    const searchUrl = `https://en.wikipedia.org/w/api.php?action=query&list=search&srsearch=${encodeURIComponent(q)}&srlimit=2&format=json`;
+    const sRes = await fetch(searchUrl, { headers: { "User-Agent": userAgent }, signal: controller.signal }).then((r) => r.json());
+    const pageId = sRes?.query?.search?.[0]?.pageid;
+    if (!pageId) return null;
+    const revUrl = `https://en.wikipedia.org/w/api.php?action=query&pageids=${pageId}&prop=revisions&rvprop=content&rvslots=main&format=json`;
+    const rRes = await fetch(revUrl, { headers: { "User-Agent": userAgent }, signal: controller.signal }).then((r) => r.json());
+    const page = rRes?.query?.pages?.[String(pageId)];
+    const rev = page?.revisions?.[0];
+    const text = rev?.slots?.main?.["*"] ?? rev?.["*"] ?? "";
+    if (!text) return null;
+    const scores = [];
+    let mcVal = null;
+    const mc = /\|\s*(?:MC|mc)\s*=\s*([^\n|]+)/.exec(text);
+    if (mc) { mcVal = parseWikiScoreToken(mc[1]); if (mcVal) scores.push(mcVal); }
+    const revRe = /\|\s*rev\d+score\s*=\s*([^\n]+)/gi;
+    let m;
+    while ((m = revRe.exec(text)) !== null) {
+      const s = parseWikiScoreToken(m[1]);
+      if (s !== null) scores.push(s);
+    }
+    if (!scores.length) return null;
+    const avg = scores.reduce((a, b) => a + b, 0) / scores.length;
+    const value = mcVal ? Math.round(mcVal * 0.55 + avg * 0.45) : Math.round(avg);
+    return { value: Math.max(20, Math.min(99, value)), count: mcVal ? Math.max(scores.length + 5, 7) : scores.length };
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 const minYear = Number(process.env.MB_MIN_YEAR ?? 1900);
@@ -206,7 +273,7 @@ for (let start = since; start <= until && !reachedMax; start = addDays(start, 8)
       found += 1;
       const date = row["first-release-date"];
       const year = Number(String(date).slice(0, 4));
-      if (row["primary-type"] !== "Album" || typeof date !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(date) || year < minYear || year > maxYear || !row.id || !row.title) {
+      if (row["primary-type"] !== "Album" || typeof date !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(date) || year < minYear || year > maxYear || !row.id || !hasValidText(row.title) || !artistNamesOf(row).length) {
         skippedInvalid += 1;
         continue;
       }
@@ -214,11 +281,20 @@ for (let start = since; start <= until && !reachedMax; start = addDays(start, 8)
       if (day.ids.has(row.id)) { skippedExisting += 1; continue; }
 
       let detail = null;
+      let critic = null;
       if (lookup && !dryRun) {
-        try { detail = await mbGet(`/release-group/${row.id}?inc=genres+ratings+artist-credits&fmt=json`); }
-        catch (error) { console.warn(`  ⚠ sem detalhes de "${row.title}": ${error.message}`); }
+        const primaryArtist = artistNamesOf(row)[0] ?? "";
+        const [mbDetail, wikiCritic] = await Promise.all([
+          mbGet(`/release-group/${row.id}?inc=genres+ratings+artist-credits&fmt=json`).catch((error) => {
+            console.warn(`  ⚠ sem detalhes de "${row.title}": ${error.message}`);
+            return null;
+          }),
+          fetchWikiCriticScore(row.title, primaryArtist),
+        ]);
+        detail = mbDetail;
+        critic = wikiCritic;
       }
-      const item = toCatalogItem(row, detail);
+      const item = toCatalogItem(row, detail, critic);
       day.ids.add(item.mbid);
       if (!dryRun) {
         day.data.items.push(item);

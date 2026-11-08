@@ -26,6 +26,16 @@ await fsp.mkdir(path.dirname(path.resolve(output)), { recursive: true });
 
 const catalog = Object.create(null);
 
+const NON_ARTIST = /^(various artists?|unknown( artist)?|\[?no artist\]?|\[?anonymous\]?|\[?traditional\]?|\[?unknown\]?|\[?data\]?|special purpose.*)$/i;
+
+function hasValidText(value, checkNonArtist = false) {
+  if (typeof value !== "string") return false;
+  const trimmed = value.trim();
+  if (!trimmed || (checkNonArtist && NON_ARTIST.test(trimmed))) return false;
+  const norm = trimmed.normalize("NFKD").replace(/[\u0300-\u036f]/g, "").replace(/[^\p{L}\p{N}]+/gu, "");
+  return Boolean(norm && (/\p{L}/u.test(norm) || norm.length >= 2));
+}
+
 function getGenres(row) {
   const releaseGenres = Array.isArray(row.genres)
     ? row.genres.map((genre) => genre?.name).filter((name) => typeof name === "string")
@@ -94,9 +104,13 @@ function processArchive() {
                 .map(credit => typeof credit?.artist?.name === "string"
                   ? credit.artist.name
                   : typeof credit?.name === "string" ? credit.name : "")
-                .filter(Boolean))]
+                .filter(name => hasValidText(name, true)))]
             : [];
-          const artistName = artistNames[0] ?? "Unknown Artist";
+          const artistName = artistNames[0] ?? "";
+          if (!artistName || !hasValidText(row.title)) {
+            skipped++;
+            continue;
+          }
 
           const monthDay = date.slice(5);
 
@@ -146,28 +160,31 @@ function processArchive() {
               const artistNames = Array.isArray(row["artist-credit"])
                 ? [...new Set(row["artist-credit"]
                     .map(credit => typeof credit?.artist?.name === "string"
-                      ? credit.artist.name
-                      : typeof credit?.name === "string" ? credit.name : "")
-                    .filter(Boolean))]
+                       ? credit.artist.name
+                       : typeof credit?.name === "string" ? credit.name : "")
+                    .filter(name => hasValidText(name, true)))]
                 : [];
-              const artistName = artistNames[0] ?? "Unknown Artist";
+              const artistName = artistNames[0] ?? "";
+              if (!artistName || !hasValidText(row.title)) {
+                skipped++;
+              } else {
+                const monthDay = date.slice(5);
 
-              const monthDay = date.slice(5);
+                if (!catalog[monthDay]) catalog[monthDay] = [];
 
-              if (!catalog[monthDay]) catalog[monthDay] = [];
+                catalog[monthDay].push({
+                  mbid: row.id,
+                  title: row.title,
+                  artistName,
+                  artistNames,
+                  firstReleaseDate: date,
+                  genres: getGenres(row),
+                  ratingVotes: Number(row.rating?.["votes-count"] ?? 0),
+                  ratingValue: Number(row.rating?.value ?? 0)
+                });
 
-              catalog[monthDay].push({
-                mbid: row.id,
-                title: row.title,
-                artistName,
-                artistNames,
-                firstReleaseDate: date,
-                genres: getGenres(row),
-                ratingVotes: Number(row.rating?.["votes-count"] ?? 0),
-                ratingValue: Number(row.rating?.value ?? 0)
-              });
-
-              kept++;
+                kept++;
+              }
             }
           }
         } catch {
