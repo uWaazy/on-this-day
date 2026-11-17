@@ -2166,7 +2166,11 @@
       updChangelogHide: "Hide changelog",
       albumTagsTitle: "Cover labels",
       albumTagsToggle: "Show category tags on covers",
-      albumTagsDesc: "Corner ribbon tags (COLLAB, LIVE, HITS…)"
+      albumTagsDesc: "Corner ribbon tags (COLLAB, LIVE, HITS…)",
+      themeTitle: "Theme",
+      themeAuto: "Auto (Spotify)",
+      themeDark: "Dark",
+      themeLight: "Light"
     },
     pt: {
       eyebrow: "HISTÓRIA DA MÚSICA",
@@ -2320,7 +2324,11 @@
       updChangelogHide: "Recolher changelog",
       albumTagsTitle: "Etiquetas nas capas",
       albumTagsToggle: "Exibir etiquetas de categoria",
-      albumTagsDesc: "Fita no canto da capa (COLLAB, LIVE, HITS…)"
+      albumTagsDesc: "Fita no canto da capa (COLLAB, LIVE, HITS…)",
+      themeTitle: "Tema",
+      themeAuto: "Automático",
+      themeDark: "Escuro",
+      themeLight: "Claro"
     },
     es: {
       eyebrow: "HISTORIA DE LA MÚSICA",
@@ -2474,7 +2482,11 @@
       updChangelogHide: "Ocultar changelog",
       albumTagsTitle: "Etiquetas en portadas",
       albumTagsToggle: "Mostrar etiquetas de categoría",
-      albumTagsDesc: "Cinta en la esquina (COLLAB, LIVE, HITS…)"
+      albumTagsDesc: "Cinta en la esquina (COLLAB, LIVE, HITS…)",
+      themeTitle: "Tema",
+      themeAuto: "Automático",
+      themeDark: "Oscuro",
+      themeLight: "Claro"
     }
   };
   function detectLang() {
@@ -2600,7 +2612,7 @@
     const cached = readCache5();
     if (!force && cached && Date.now() - cached.at < CHECK_INTERVAL_MS) return toInfo(cached.latest, cached.at);
     try {
-      const response = await withTimeout(fetch(`${RAW_MANIFEST_URL}?t=${Math.floor(Date.now() / 6e4)}`, { cache: "no-store" }), 8e3);
+      const response = await withTimeout(fetch(`${RAW_MANIFEST_URL}?t=${Date.now()}`, { cache: "no-store" }), 8e3);
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
       const manifest = await response.json();
       const latest = typeof manifest.version === "string" && /^\d+\.\d+\.\d+/.test(manifest.version) ? manifest.version : null;
@@ -2673,7 +2685,8 @@
     "Automatic deduplication of duplicate albums in the same year (keeps the primary edition cleanly).",
     "Faster fallback (< 1s) when opening albums not available on Spotify.",
     "8-category Release Type Filter (includes Collaborative Duo/Trio albums enabled by default, plus hideable Compilations, Live, Remixes, Soundtracks, Demos, Mixtapes & Spoken Word).",
-    "Optional corner ribbon tags on album covers (COLLAB, LIVE, HITS, REMIX, OST, etc.), toggleable in Settings."
+    "Optional corner ribbon tags on album covers (COLLAB, LIVE, HITS, REMIX, OST, etc.), toggleable in Settings.",
+    "Automatic Light/Dark theme detection for Spicetify Marketplace themes, plus manual Auto / Dark / Light selector in Settings."
   ];
   function UpdateBadge({ lang }) {
     const [info, setInfo] = useState(peekUpdate);
@@ -2686,21 +2699,36 @@
       let cancelled = false;
       const check = () => {
         void checkForUpdate(true).then((result) => {
-          if (!cancelled) setInfo(result);
+          if (cancelled) return;
+          setInfo(result);
+          if (result.hasUpdate && result.latest) {
+            try {
+              const notifiedKey = "on-this-day:notified-update";
+              if (localStorage.getItem(notifiedKey) !== result.latest) {
+                localStorage.setItem(notifiedKey, result.latest);
+                globalThis.Spicetify?.showNotification?.(
+                  t(lang, "updBadgeNew", { latest: result.latest })
+                );
+              }
+            } catch {
+            }
+          }
         });
       };
       check();
-      const timer = window.setInterval(check, 10 * 60 * 1e3);
+      const timer = window.setInterval(check, 2 * 60 * 1e3);
       const onVisible = () => {
         if (document.visibilityState === "visible") check();
       };
+      window.addEventListener("focus", check);
       document.addEventListener("visibilitychange", onVisible);
       return () => {
         cancelled = true;
         window.clearInterval(timer);
+        window.removeEventListener("focus", check);
         document.removeEventListener("visibilitychange", onVisible);
       };
-    }, []);
+    }, [lang]);
     useEffect(() => {
       if (!open) return;
       closeRef.current?.focus({ preventScroll: true });
@@ -4301,6 +4329,92 @@
     )), /* @__PURE__ */ Spicetify.React.createElement("div", { className: "otd-bg-overlay" }));
   }
 
+  // src/services/theme.ts
+  var THEME_PREF_KEY = "on-this-day:theme:v1";
+  function getThemePref() {
+    try {
+      const saved = localStorage.getItem(THEME_PREF_KEY);
+      if (saved === "auto" || saved === "dark" || saved === "light") return saved;
+    } catch {
+    }
+    return "auto";
+  }
+  function setThemePref(pref) {
+    try {
+      localStorage.setItem(THEME_PREF_KEY, pref);
+    } catch {
+    }
+  }
+  function parseColorRgb(raw) {
+    const value = raw.trim();
+    if (!value || value === "transparent") return null;
+    const hex = /^#([0-9a-f]{3}|[0-9a-f]{6})$/i.exec(value);
+    if (hex) {
+      const digits = hex[1];
+      if (digits.length === 3) {
+        return [
+          parseInt(digits[0] + digits[0], 16),
+          parseInt(digits[1] + digits[1], 16),
+          parseInt(digits[2] + digits[2], 16),
+          1
+        ];
+      }
+      return [
+        parseInt(digits.slice(0, 2), 16),
+        parseInt(digits.slice(2, 4), 16),
+        parseInt(digits.slice(4, 6), 16),
+        1
+      ];
+    }
+    const rgb = /^rgba?\(\s*([\d.]+)\s*[,\s]\s*([\d.]+)\s*[,\s]\s*([\d.]+)(?:\s*[,/]\s*([\d.]+))?\s*\)$/i.exec(value);
+    if (rgb) {
+      const a = rgb[4] !== void 0 ? Number(rgb[4]) : 1;
+      if (Number.isFinite(a) && a <= 0.05) return null;
+      return [Number(rgb[1]), Number(rgb[2]), Number(rgb[3]), a];
+    }
+    return null;
+  }
+  function luminance(r, g, b) {
+    return (0.2126 * r + 0.7152 * g + 0.0722 * b) / 255;
+  }
+  function detectSpotifyTheme() {
+    if (typeof document === "undefined" || typeof getComputedStyle === "undefined") return "dark";
+    try {
+      const rootStyle = getComputedStyle(document.documentElement);
+      const vars = ["--spice-main", "--background-base", "--spice-sidebar", "--spice-card"];
+      for (const v of vars) {
+        const val = rootStyle.getPropertyValue(v);
+        const parsed = parseColorRgb(val);
+        if (parsed) {
+          return luminance(parsed[0], parsed[1], parsed[2]) >= 0.52 ? "light" : "dark";
+        }
+      }
+      const candidates = [
+        document.querySelector(".Root__main-view"),
+        document.body,
+        document.documentElement
+      ];
+      for (const el of candidates) {
+        if (!el) continue;
+        const bg = getComputedStyle(el).backgroundColor;
+        const parsed = parseColorRgb(bg);
+        if (parsed) {
+          return luminance(parsed[0], parsed[1], parsed[2]) >= 0.52 ? "light" : "dark";
+        }
+      }
+    } catch {
+    }
+    return "dark";
+  }
+  function resolveTheme(pref) {
+    if (pref === "dark" || pref === "light") return pref;
+    return detectSpotifyTheme();
+  }
+  function applyDocumentTheme(theme) {
+    if (typeof document === "undefined") return;
+    document.documentElement.dataset.otdTheme = theme;
+  }
+
   // src/app/OnThisDay.tsx
   var INITIAL_ALBUMS_PER_YEAR = 5;
   var ALBUMS_PER_EXPANSION = 5;
@@ -4421,6 +4535,8 @@
     const [sortMenuOpen, setSortMenuOpen] = useState(false);
     const [albumTypeFilter, setAlbumTypeFilterState] = useState(getAlbumTypeFilter);
     const [showAlbumTags, setShowAlbumTagsState] = useState(getShowAlbumTags);
+    const [themePref, setThemePrefState] = useState(getThemePref);
+    const [resolvedTheme, setResolvedTheme] = useState(() => resolveTheme(getThemePref()));
     const [typeMenuOpen, setTypeMenuOpen] = useState(false);
     const [scoreTick, setScoreTick] = useState(0);
     const [preview, setPreview] = useState(null);
@@ -4459,6 +4575,21 @@
     const dayLoading = catalog?.monthDay !== monthDay && !error;
     const state = catalog ? "ready" : error ? "error" : "loading";
     useEffect(() => subscribeAlbumScores(() => setScoreTick((n) => n + 1)), []);
+    useEffect(() => {
+      const sync = () => {
+        const next = resolveTheme(themePref);
+        setResolvedTheme(next);
+        applyDocumentTheme(next);
+      };
+      sync();
+      if (themePref !== "auto" || typeof MutationObserver === "undefined") return;
+      const observer = new MutationObserver(sync);
+      observer.observe(document.documentElement, { attributes: true, attributeFilter: ["style", "class"] });
+      if (document.body) {
+        observer.observe(document.body, { attributes: true, attributeFilter: ["style", "class"] });
+      }
+      return () => observer.disconnect();
+    }, [themePref]);
     useEffect(() => {
       if (!settingsOpen && !sortMenuOpen && !typeMenuOpen) return;
       const onPointerDown = (event) => {
@@ -5005,7 +5136,7 @@
         scheduleNavHide();
       } }, /* @__PURE__ */ Spicetify.React.createElement("section", { className: "otd-shell" }, /* @__PURE__ */ Spicetify.React.createElement("p", { className: "otd-eyebrow" }, t(lang, "eyebrow")), /* @__PURE__ */ Spicetify.React.createElement("h1", null, t(lang, "errorTitle")), /* @__PURE__ */ Spicetify.React.createElement("p", { className: "otd-message" }, t(lang, "errorMsg", { date: dateLabel })), /* @__PURE__ */ Spicetify.React.createElement("pre", { className: "otd-error" }, error), /* @__PURE__ */ Spicetify.React.createElement("button", { type: "button", className: "otd-retry-btn", onClick: () => setRetryNonce((current2) => current2 + 1) }, t(lang, "retry")), /* @__PURE__ */ Spicetify.React.createElement("p", { className: "otd-hint" }, t(lang, "errorHint"))));
     }
-    return /* @__PURE__ */ Spicetify.React.createElement("main", { ref: pageRef, className: "otd-page", onMouseMove: handlePageMouseMove, onMouseLeave: () => {
+    return /* @__PURE__ */ Spicetify.React.createElement("main", { ref: pageRef, className: `otd-page otd-theme-${resolvedTheme}`, onMouseMove: handlePageMouseMove, onMouseLeave: () => {
       setTooltip(null);
       if (tooltipTimer.current) clearTimeout(tooltipTimer.current);
       scheduleNavHide();
@@ -5083,7 +5214,24 @@
       },
       /* @__PURE__ */ Spicetify.React.createElement("span", { className: `otd-type-check${showAlbumTags ? " is-checked" : ""}`, "aria-hidden": "true" }, showAlbumTags ? /* @__PURE__ */ Spicetify.React.createElement(CheckIcon, { size: 12 }) : ""),
       /* @__PURE__ */ Spicetify.React.createElement("span", { className: "otd-settings-name otd-settings-name--stack" }, /* @__PURE__ */ Spicetify.React.createElement("span", { className: "otd-settings-option-label" }, t(lang, "albumTagsToggle")), /* @__PURE__ */ Spicetify.React.createElement("span", { className: "otd-settings-option-desc" }, t(lang, "albumTagsDesc")))
-    )), /* @__PURE__ */ Spicetify.React.createElement("div", { className: "otd-settings-divider" }), /* @__PURE__ */ Spicetify.React.createElement("div", { className: "otd-settings-section" }, /* @__PURE__ */ Spicetify.React.createElement("p", { className: "otd-settings-title" }, t(lang, "changeLanguage")), /* @__PURE__ */ Spicetify.React.createElement("div", { className: "otd-settings-options" }, Object.entries(LANGUAGES).map(([code, info]) => {
+    )), /* @__PURE__ */ Spicetify.React.createElement("div", { className: "otd-settings-divider" }), /* @__PURE__ */ Spicetify.React.createElement("div", { className: "otd-settings-section" }, /* @__PURE__ */ Spicetify.React.createElement("p", { className: "otd-settings-title" }, t(lang, "themeTitle")), /* @__PURE__ */ Spicetify.React.createElement("div", { className: "otd-theme-pills", role: "radiogroup", "aria-label": t(lang, "themeTitle") }, ["auto", "dark", "light"].map((mode) => {
+      const active2 = themePref === mode;
+      return /* @__PURE__ */ Spicetify.React.createElement(
+        "button",
+        {
+          type: "button",
+          key: mode,
+          role: "radio",
+          "aria-checked": active2,
+          className: `otd-theme-pill${active2 ? " is-active" : ""}`,
+          onClick: () => {
+            setThemePref(mode);
+            setThemePrefState(mode);
+          }
+        },
+        t(lang, mode === "auto" ? "themeAuto" : mode === "dark" ? "themeDark" : "themeLight")
+      );
+    }))), /* @__PURE__ */ Spicetify.React.createElement("div", { className: "otd-settings-divider" }), /* @__PURE__ */ Spicetify.React.createElement("div", { className: "otd-settings-section" }, /* @__PURE__ */ Spicetify.React.createElement("p", { className: "otd-settings-title" }, t(lang, "changeLanguage")), /* @__PURE__ */ Spicetify.React.createElement("div", { className: "otd-settings-options" }, Object.entries(LANGUAGES).map(([code, info]) => {
       const active2 = code === lang;
       return /* @__PURE__ */ Spicetify.React.createElement(
         "button",

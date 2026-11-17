@@ -2268,3 +2268,331 @@
 @media (prefers-reduced-motion: reduce) {
   .otd-cover-skeleton { animation: none; }
 }
+
+/* ===== Seletor de Tema (Automático / Escuro / Claro) ===== */
+.otd-theme-pills {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.otd-theme-pill {
+  min-height: 32px;
+  padding: 0 8px;
+  border: 1px solid rgba(255,255,255,.12);
+  border-radius: 10px;
+  background: rgba(255,255,255,.04);
+  color: var(--otd-text-secondary);
+  font: inherit;
+  font-size: 11.5px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: background .15s ease, color .15s ease, border-color .15s ease;
+}
+
+.otd-theme-pill:hover {
+  color: var(--otd-text);
+  background: rgba(255,255,255,.1);
+}
+
+.otd-theme-pill.is-active {
+  color: #06130b;
+  background: var(--otd-accent);
+  border-color: var(--otd-accent);
+}
+
+/* ===== Tema Claro (Light Mode — automático para temas brancos ou manual em Settings) ===== */
+:root[data-otd-theme="light"],
+.otd-page.otd-theme-light {
+  --otd-bg: #f3f5f8;
+  --otd-surface: #ffffff;
+  --otd-surface-hover: #eef2f6;
+  --otd-text: #11161c;
+  --otd-text-secondary: #485464;
+  --otd-text-muted: #687587;
+  --otd-accent: #16a34a;
+  --otd-accent-hover: #15803d;
+  --otd-border: rgba(15, 23, 42, .12);
+  --otd-border-hover: rgba(15, 23, 42, .26);
+  --otd-shadow: 0 10px 26px rgba(15, 23, 42, .10);
+  --otd-shadow-hover: 0 16px 36px rgba(15, 23, 42, .15);
+}
+
+.otd-theme-light .otd-bg-slot {
+  opacity: .72;
+}
+
+/* Mantém as fotos do fundo nítidas sem véu branco; apenas um leve gradiente no topo para leitura dos textos */
+.otd-theme-light .otd-bg-overlay {
+  background:
+    linear-gradient(180deg, rgba(243, 245, 248, .44) 0%, rgba(243, 245, 248, .10) 20%, transparent 38%, rgba(15, 20, 26, .16) 100%);
+}
+
+.otd-theme-light .otd-heading-left > div:last-child,
+.otd-theme-light .otd-eyebrow,
+.otd-theme-light .otd-subtitle,
+.otd-theme-light .otd-count,
+.otd-theme-light .otd-attribution {
+  color: #0f1419;
+  font-weight: 700;
+  text-shadow:
+    0 0 6px rgba(255, 255, 255, .98),
+    0 0 16px rgba(255, 255, 255, .94),
+    0 1px 3px rgba(255, 255, 255, 1);
+}
+
+.otd-theme-light .otd-heading h1 {
+  font-weight: 900;
+}
+
+.otd-theme-light .otd-year-heading p {
+  color: #334155;
+  font-weight: 700;
+}
+
+.otd-theme-light .otd-app-icon {
+  background: rgba(22, 163, 74, .12);
+  border-color: rgba(22, 163, 74, .28);
+  color: #15803d;
+}
+
+.otd-theme-light .otd-year-section {
+  background: linear-gradient(115deg, rgba(255, 255, 255, .72), rgba(255, 255, 255, .36) 72%, transparent);
+  border-bottom-color: rgba(15, 23, 42, .08);
+}
+
+.otd-theme-light .otd-album-card,
+.otd-theme-light .otd-artist-card {
+  background: linear-gradient(180deg, rgba(255, 255, 255, .96), rgba(248, 250, 252, .98));
+  border-color: rgba(15, 23, 42, .10);
+  box-shadow: 0 4px 14px rgba(15, 23, 42, .06);
+}
+
+.otd-theme-light .otd-album-card:hover,
+.otd-theme-light .otd-artist-card:hover {
+  background: #ffffff;
+  border-color: rgba(22, 163, 74, .45);
+  box-shadow: 0 12px 26px rgba(15, 23, 42, .12);
+}
+
+.otd-theme-light .otd-cover-wrap,
+.otd-theme-light .otd-artist-photo {
+  background: #e5e9f0;
+}
+
+.otd-theme-light .otd-cover-placeholder {
+  background: linear-gradient(145deg, #e5e9f0, #d4dbe5);
+  color: #64748b;
+}
+
+.otd-theme-light .otd-cover-skeleton {
+  background: linear-gradient(100deg, #e5e9f0 30%, #f1f5f9 50%, #e5e9f0 70%);
+  background-size: 220% 100%;
+}
+
+.otd-theme-light .otd-scores {
+  border-top-color: rgba(15, 23, 42, .08);
+}
+
+.otd-theme-light .otd-score--critic {
+  --otd-score-color: #2563eb;
+}
+
+.otd-theme-light .otd-score-track {
+  background: rgba(15, 23, 42, .12);
+}
+
+.otd-theme-light .otd-settings-trigger,
+.otd-theme-light .otd-prev-day,
+.otd-theme-light .otd-order-btn,
+.otd-theme-light .otd-genre-trigger,
+.otd-theme-light .otd-genre-clear,
+.otd-theme-light .otd-version-badge,
+.otd-theme-light .otd-year-more,
+.otd-theme-light .otd-year-less,
+.otd-theme-light .otd-tabs,
+.otd-theme-light .otd-retry-btn {
+  background: rgba(255, 255, 255, .82);
+  border-color: rgba(15, 23, 42, .13);
+  color: var(--otd-text);
+}
+
+.otd-theme-light .otd-settings-trigger:hover,
+.otd-theme-light .otd-prev-day:hover,
+.otd-theme-light .otd-order-btn:hover,
+.otd-theme-light .otd-genre-trigger:hover,
+.otd-theme-light .otd-version-badge:hover,
+.otd-theme-light .otd-year-more:hover,
+.otd-theme-light .otd-year-less:hover {
+  background: #ffffff;
+  border-color: rgba(15, 23, 42, .24);
+}
+
+.otd-theme-light .otd-version-badge.has-update {
+  color: #ffffff;
+  background: var(--otd-accent);
+  border-color: var(--otd-accent);
+}
+
+.otd-theme-light .otd-version-badge.has-update:hover {
+  background: var(--otd-accent-hover);
+}
+
+.otd-theme-light .otd-tab {
+  color: var(--otd-text-secondary);
+}
+
+.otd-theme-light .otd-tab.is-active {
+  color: #ffffff;
+  background: var(--otd-accent);
+}
+
+.otd-theme-light .otd-explicit-pill.is-explicit,
+.otd-theme-light .otd-settings-badge.is-explicit {
+  background: rgba(15, 23, 42, .14);
+  color: #11161c;
+}
+
+.otd-theme-light .otd-settings-lang-pill,
+.otd-theme-light .otd-settings-badge {
+  background: rgba(15, 23, 42, .08);
+  color: #1e293b;
+}
+
+.otd-theme-light .otd-settings-menu,
+.otd-theme-light .otd-genre-menu {
+  background: linear-gradient(180deg, #ffffff, #f8fafc);
+  border-color: rgba(15, 23, 42, .14);
+  box-shadow: 0 20px 50px rgba(15, 23, 42, .18);
+}
+
+.otd-theme-light .otd-settings-option:hover {
+  background: rgba(15, 23, 42, .06);
+  color: #11161c;
+}
+
+.otd-theme-light .otd-settings-option.is-active {
+  background: rgba(22, 163, 74, .12);
+  color: #15803d;
+}
+
+.otd-theme-light .otd-settings-divider {
+  background: rgba(15, 23, 42, .09);
+}
+
+.otd-theme-light .otd-theme-pill {
+  background: rgba(15, 23, 42, .05);
+  border-color: rgba(15, 23, 42, .12);
+  color: #485464;
+}
+
+.otd-theme-light .otd-theme-pill.is-active {
+  color: #ffffff;
+  background: var(--otd-accent);
+  border-color: var(--otd-accent);
+}
+
+.otd-theme-light .otd-type-check {
+  border-color: rgba(15, 23, 42, .28);
+  background: #ffffff;
+  color: #ffffff;
+}
+
+.otd-theme-light .otd-type-check.is-checked {
+  border-color: var(--otd-accent);
+  background: var(--otd-accent);
+  color: #ffffff;
+}
+
+.otd-theme-light .otd-type-quick {
+  background: rgba(15, 23, 42, .05);
+  border-color: rgba(15, 23, 42, .14);
+  color: #334155;
+}
+
+.otd-theme-light .otd-genre-chip {
+  background: rgba(15, 23, 42, .04);
+  border-color: rgba(15, 23, 42, .12);
+  color: #334155;
+}
+
+.otd-theme-light .otd-genre-chip.is-selected {
+  background: rgba(22, 163, 74, .14);
+  border-color: var(--otd-accent);
+  color: #15803d;
+}
+
+.otd-theme-light .otd-artist-genre {
+  background: rgba(15, 23, 42, .06);
+  border-color: rgba(15, 23, 42, .12);
+  color: #334155;
+}
+
+.otd-theme-light .otd-fab {
+  background: rgba(255, 255, 255, .95);
+  color: #11161c;
+  border-color: rgba(15, 23, 42, .16);
+}
+
+.otd-theme-light .otd-fab--on {
+  background: var(--otd-accent);
+  color: #ffffff;
+  border-color: var(--otd-accent);
+}
+
+.otd-theme-light .otd-fab-tip {
+  background: #ffffff;
+  color: #11161c;
+  border-color: rgba(15, 23, 42, .14);
+}
+
+:root[data-otd-theme="light"] .otd-update-dialog,
+:root[data-otd-theme="light"] .otd-cover-preview,
+:root[data-otd-theme="light"] .otd-year-nav-inner,
+:root[data-otd-theme="light"] .otd-info-pop {
+  background: linear-gradient(180deg, #ffffff, #f8fafc);
+  color: #11161c;
+  border-color: rgba(15, 23, 42, .14);
+  box-shadow: 0 24px 60px rgba(15, 23, 42, .22);
+}
+
+:root[data-otd-theme="light"] .otd-update-versions,
+:root[data-otd-theme="light"] .otd-update-block p,
+:root[data-otd-theme="light"] .otd-update-block ol,
+:root[data-otd-theme="light"] .otd-changelog-list,
+:root[data-otd-theme="light"] .otd-cover-preview > p {
+  color: #485464;
+}
+
+:root[data-otd-theme="light"] .otd-update-versions strong,
+:root[data-otd-theme="light"] .otd-changelog-toggle,
+:root[data-otd-theme="light"] .otd-cover-preview h2 {
+  color: #11161c;
+}
+
+:root[data-otd-theme="light"] .otd-update-block {
+  background: rgba(15, 23, 42, .035);
+  border-color: rgba(15, 23, 42, .09);
+}
+
+:root[data-otd-theme="light"] .otd-update-command code {
+  background: #eef2f6;
+  color: #0f172a;
+}
+
+:root[data-otd-theme="light"] .otd-update-close,
+:root[data-otd-theme="light"] .otd-update-done,
+:root[data-otd-theme="light"] .otd-preview-open-btn {
+  color: #11161c;
+  background: rgba(15, 23, 42, .07);
+  border-color: rgba(15, 23, 42, .16);
+}
+
+:root[data-otd-theme="light"] .otd-year-nav-item {
+  color: #485464;
+}
+
+:root[data-otd-theme="light"] .otd-year-nav-item:hover,
+:root[data-otd-theme="light"] .otd-year-nav-item.is-active {
+  color: #11161c;
+}
