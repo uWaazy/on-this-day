@@ -318,6 +318,71 @@
   width: 256px;
 }
 
+.otd-type-menu {
+  left: 0;
+  right: auto;
+  width: 288px;
+}
+
+.otd-type-count {
+  color: var(--otd-accent);
+  font-size: 11.5px;
+  font-weight: 800;
+  font-variant-numeric: tabular-nums;
+}
+
+.otd-type-option {
+  padding: 7px 10px;
+  font-size: 13px;
+}
+
+.otd-type-check {
+  display: inline-grid;
+  place-items: center;
+  flex-shrink: 0;
+  width: 18px;
+  height: 18px;
+  border-radius: 5px;
+  border: 1.5px solid rgba(255,255,255,.28);
+  background: rgba(255,255,255,.04);
+  color: #06130b;
+  transition: background .15s ease, border-color .15s ease;
+}
+
+.otd-type-check.is-checked {
+  border-color: var(--otd-accent);
+  background: var(--otd-accent);
+}
+
+.otd-type-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid rgba(255,255,255,.08);
+}
+
+.otd-type-quick {
+  flex: 1 1 0;
+  min-height: 30px;
+  padding: 0 10px;
+  border: 1px solid rgba(255,255,255,.14);
+  border-radius: 999px;
+  color: var(--otd-text-secondary);
+  background: rgba(255,255,255,.05);
+  font: inherit;
+  font-size: 11.5px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: background .15s ease, color .15s ease, border-color .15s ease;
+}
+
+.otd-type-quick:hover {
+  color: var(--otd-text);
+  background: rgba(255,255,255,.11);
+  border-color: rgba(255,255,255,.26);
+}
+
 .otd-settings-name--stack {
   display: flex;
   flex-direction: column;
@@ -790,6 +855,36 @@
   letter-spacing: .02em;
   text-align: left;
 }
+
+/* Etiqueta diagonal presa no canto superior direito da capa */
+.otd-cover-tag {
+  position: absolute;
+  top: 12px;
+  right: -28px;
+  z-index: 2;
+  width: 102px;
+  padding: 3px 0;
+  transform: rotate(45deg);
+  text-align: center;
+  font-size: 8.5px;
+  font-weight: 900;
+  letter-spacing: .09em;
+  line-height: 1.25;
+  text-transform: uppercase;
+  color: #fff;
+  box-shadow: 0 2px 8px rgba(0,0,0,.55);
+  pointer-events: none;
+  user-select: none;
+}
+
+.otd-cover-tag--collab { background: linear-gradient(90deg, #7c3aed, #9333ea); }
+.otd-cover-tag--live { background: linear-gradient(90deg, #d97706, #f59e0b); color: #160c00; }
+.otd-cover-tag--compilation { background: linear-gradient(90deg, #0891b2, #06b6d4); color: #021418; }
+.otd-cover-tag--remix { background: linear-gradient(90deg, #db2777, #ec4899); }
+.otd-cover-tag--soundtrack { background: linear-gradient(90deg, #2563eb, #3b82f6); }
+.otd-cover-tag--demos { background: linear-gradient(90deg, #ca8a04, #eab308); color: #161000; }
+.otd-cover-tag--mixtape { background: linear-gradient(90deg, #059669, #10b981); color: #02140d; }
+.otd-cover-tag--spoken { background: linear-gradient(90deg, #4b5563, #6b7280); }
 
 .otd-cover-actions {
   position: absolute;
@@ -1811,6 +1906,63 @@
   border: 1px solid rgba(255,255,255,.08);
   border-radius: 14px;
   background: rgba(255,255,255,.04);
+}
+
+.otd-changelog-block {
+  padding: 0;
+  overflow: hidden;
+}
+
+.otd-changelog-toggle {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  width: 100%;
+  padding: 12px 16px;
+  border: 0;
+  background: transparent;
+  color: #f2f2f2;
+  font: inherit;
+  font-size: 13.5px;
+  font-weight: 800;
+  cursor: pointer;
+  text-align: left;
+  transition: background .15s ease;
+}
+
+.otd-changelog-toggle:hover {
+  background: rgba(255,255,255,.05);
+}
+
+.otd-changelog-toggle:focus-visible {
+  outline: 2px solid var(--otd-accent);
+  outline-offset: -2px;
+}
+
+.otd-changelog-chevron {
+  display: inline-flex;
+  color: #b3b3b3;
+  transition: transform .18s ease, color .18s ease;
+}
+
+.otd-changelog-toggle.is-open .otd-changelog-chevron {
+  transform: rotate(180deg);
+  color: var(--otd-accent);
+}
+
+.otd-changelog-list {
+  margin: 0;
+  padding: 0 16px 14px 34px;
+  border-top: 1px solid rgba(255,255,255,.07);
+  padding-top: 10px;
+  color: #cfcfcf;
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.otd-changelog-list li + li {
+  margin-top: 5px;
 }
 
 .otd-update-block h3 { margin: 0 0 6px; font-size: 14px; font-weight: 800; }

@@ -154,6 +154,9 @@ function genresOf(row, fallbackTags) {
 function toCatalogItem(searchRow, detail, critic) {
   const source = detail ?? searchRow;
   const artistNames = artistNamesOf(source).length ? artistNamesOf(source) : artistNamesOf(searchRow);
+  const secTypes = Array.isArray(source["secondary-types"])
+    ? source["secondary-types"].filter((s) => typeof s === "string" && s)
+    : [];
   const item = {
     mbid: searchRow.id,
     title: searchRow.title,
@@ -164,6 +167,7 @@ function toCatalogItem(searchRow, detail, critic) {
     ratingVotes: Number(detail?.rating?.["votes-count"] ?? 0),
     ratingValue: Number(detail?.rating?.value ?? 0),
   };
+  if (secTypes.length) item.secondaryTypes = secTypes;
   if (critic && typeof critic.value === "number" && critic.value > 0) {
     item.criticScore = critic.value;
     item.criticVotes = critic.count;

@@ -118,7 +118,10 @@ function processArchive() {
             catalog[monthDay] = [];
           }
 
-          catalog[monthDay].push({
+          const secTypes = Array.isArray(row["secondary-types"])
+            ? row["secondary-types"].filter((s) => typeof s === "string" && s)
+            : [];
+          const entry = {
             mbid: row.id,
             title: row.title,
             artistName,
@@ -127,7 +130,9 @@ function processArchive() {
             genres: getGenres(row),
             ratingVotes: Number(row.rating?.["votes-count"] ?? 0),
             ratingValue: Number(row.rating?.value ?? 0)
-          });
+          };
+          if (secTypes.length) entry.secondaryTypes = secTypes;
+          catalog[monthDay].push(entry);
 
           kept++;
         } catch {
@@ -172,7 +177,10 @@ function processArchive() {
 
                 if (!catalog[monthDay]) catalog[monthDay] = [];
 
-                catalog[monthDay].push({
+                const secTypes = Array.isArray(row["secondary-types"])
+                  ? row["secondary-types"].filter((s) => typeof s === "string" && s)
+                  : [];
+                const entry = {
                   mbid: row.id,
                   title: row.title,
                   artistName,
@@ -181,7 +189,9 @@ function processArchive() {
                   genres: getGenres(row),
                   ratingVotes: Number(row.rating?.["votes-count"] ?? 0),
                   ratingValue: Number(row.rating?.value ?? 0)
-                });
+                };
+                if (secTypes.length) entry.secondaryTypes = secTypes;
+                catalog[monthDay].push(entry);
 
                 kept++;
               }

@@ -1,4 +1,4 @@
-/* On This Day v1.1.15 — https://github.com/uWaazy/on-this-day
+/* On This Day v1.1.16 — https://github.com/uWaazy/on-this-day
  * Bundle legível (sem minificação), gerado a partir do código-fonte do projeto.
  * Roda dentro do Spotify via Spicetify; consulta só: Spotify (sessão local), MusicBrainz/Cover Art Archive (catálogo),
  * GitHub (verificação de nova versão). Sem coleta de dados e sem credenciais. */
@@ -1117,7 +1117,10 @@
     };
     return priority ? run() : limitSpotify(run);
   }
+  var discogMemory = /* @__PURE__ */ new Map();
   async function discographyViaGraphQL(artistId, artistName, priority = false) {
+    const existing = discogMemory.get(artistId);
+    if (existing) return existing;
     const gql = Spicetify?.GraphQL;
     if (!gql?.Request) return [];
     const def = gql.Definitions?.queryArtistDiscographyAll ?? GQL_DISCOGRAPHY_ALL;
@@ -1139,10 +1142,20 @@
         }
         return out;
       } catch {
+        discogMemory.delete(artistId);
         return [];
       }
     };
-    return priority ? run() : limitSpotify(run);
+    const promise = priority ? run() : limitSpotify(run);
+    discogMemory.set(artistId, promise);
+    return promise;
+  }
+  async function albumInArtistDiscography(query, artistId, artistName) {
+    if (!artistId) return null;
+    const discog = await discographyViaGraphQL(artistId, artistName, false);
+    if (!discog.length) return null;
+    const ranked = rankAlbumCandidates(query, discog);
+    return ranked.length > 0;
   }
   var EDITION_WORDS = /* @__PURE__ */ new Set(["deluxe", "expanded", "edition", "remastered", "remaster", "version", "bonus", "explicit", "anniversary", "special", "standard", "mono", "stereo", "disc", "disk", "cd", "vol", "volume", "pt", "part", "single", "ep", "the", "a", "an", "of"]);
   function titleTokens(value) {
@@ -1400,6 +1413,7 @@
         cleanUri: typeof entry.cleanUri === "string" ? entry.cleanUri : null,
         cover: typeof entry.cover === "string" ? entry.cover : null,
         artists: Array.isArray(entry.artists) ? entry.artists.filter((a) => a && typeof a.id === "string" && typeof a.name === "string") : [],
+        albumType: typeof entry.albumType === "string" ? entry.albumType : void 0,
         totalStreams: typeof entry.totalStreams === "number" ? entry.totalStreams : void 0,
         maxTrackStreams: typeof entry.maxTrackStreams === "number" ? entry.maxTrackStreams : void 0,
         avgTrackStreams: typeof entry.avgTrackStreams === "number" ? entry.avgTrackStreams : void 0,
@@ -1474,30 +1488,31 @@
     const fromSeen = findArtistId(query, [...seen.values()]);
     if (fromSeen) return fromSeen;
     const cleanArtist = query.artistName.replace(/["]+/g, " ").replace(/\s+/g, " ").trim();
-    const artistVariants = [...new Set([cleanArtist, deabbreviateText(cleanArtist)].filter(Boolean))];
-    for (const art of artistVariants) {
-      const gqlAlbums = await searchAlbumsViaGraphQL(art, priority);
-      if (gqlAlbums.length) {
-        remember(gqlAlbums);
-        const id = findArtistId(query, gqlAlbums);
-        if (id) return id;
-      }
-    }
-    for (const art of artistVariants) {
-      try {
-        const params = new URLSearchParams({ q: art, type: "artist", limit: "5" });
-        const res = await spotifyGet(
-          `https://api.spotify.com/v1/search?${params}`,
-          priority
-        );
-        for (const item of res.artists?.items ?? []) {
-          const id = item.id ?? extractSpotifyId(item.uri, "artist");
-          if (id && item.name && artistMatches(query, [item.name])) return id;
+    const artistVariants = [...new Set([cleanArtist, deabbreviateText(cleanArtist)].filter(Boolean))].slice(0, 2);
+    const [gqlBatches, webIds] = await Promise.all([
+      Promise.all(artistVariants.map((art) => searchAlbumsViaGraphQL(art, priority).catch(() => []))),
+      Promise.all(artistVariants.map(async (art) => {
+        try {
+          const params = new URLSearchParams({ q: art, type: "artist", limit: "5" });
+          const res = await spotifyGet(
+            `https://api.spotify.com/v1/search?${params}`,
+            priority
+          );
+          for (const item of res.artists?.items ?? []) {
+            const id = item.id ?? extractSpotifyId(item.uri, "artist");
+            if (id && item.name && artistMatches(query, [item.name])) return id;
+          }
+        } catch {
         }
-      } catch {
-      }
+        return null;
+      }))
+    ]);
+    for (const batch of gqlBatches) {
+      if (batch.length) remember(batch);
     }
-    return null;
+    const fromGql = findArtistId(query, gqlBatches.flat());
+    if (fromGql) return fromGql;
+    return webIds.find((id) => Boolean(id)) ?? null;
   }
   function toLookupResult(best, explicit, clean, meta) {
     const preferred = getAlbumVersionPref() === "clean" ? clean ?? best : explicit ?? best;
@@ -1507,6 +1522,7 @@
       cleanUri: clean ? `spotify:album:${clean.id}` : null,
       cover: bestImage(preferred) ?? bestImage(best),
       artists: (best.artists ?? []).map((a) => ({ id: a.id ?? extractSpotifyId(a.uri, "artist") ?? "", name: a.name ?? "" })).filter((a) => !!a.id && !!a.name),
+      albumType: best.album_type,
       totalStreams: meta?.totalStreams ?? 0,
       maxTrackStreams: meta?.maxTrackStreams ?? 0,
       avgTrackStreams: meta?.avgTrackStreams ?? 0,
@@ -1546,59 +1562,68 @@
       const gqlDiscog = await discographyViaGraphQL(artistId2, query.artistName, priority);
       if (gqlDiscog.length) remember(gqlDiscog);
     };
-    const gqlQueries = [.../* @__PURE__ */ new Set([
-      ...titleVariants.map((t2) => `${t2} ${artist}`),
-      ...titleVariants.map((t2) => `${t2} ${artistDeabbrev}`),
-      ...titleVariants
-    ])];
-    for (const q of gqlQueries) {
-      const gqlAlbums = await searchAlbumsViaGraphQL(q, priority);
-      remember(gqlAlbums);
-      if (rankAlbumCandidates(query, [...seen.values()]).length > 0) {
-        await enrichWithDiscography();
-        const resolved2 = await finalizeCandidates(query, seen, priority);
-        if (resolved2) return { result: resolved2, hadError: false };
-      }
+    const gqlQueries = [...new Set([
+      ...titleVariants.slice(0, 2).map((t2) => `${t2} ${artist}`),
+      ...titleVariants.slice(0, 2).map((t2) => `${t2} ${artistDeabbrev}`),
+      titleVariants[0]
+    ].filter(Boolean))].slice(0, 4);
+    const gqlBatches = await Promise.all(
+      gqlQueries.map((q) => searchAlbumsViaGraphQL(q, priority).catch(() => []))
+    );
+    for (const batch of gqlBatches) remember(batch);
+    if (rankAlbumCandidates(query, [...seen.values()]).length > 0) {
+      await enrichWithDiscography();
+      const resolved2 = await finalizeCandidates(query, seen, priority);
+      if (resolved2) return { result: resolved2, hadError: false };
     }
     const webQueries = [.../* @__PURE__ */ new Set([
-      ...titleVariants.slice(0, 3).map((t2) => `album:"${t2}" artist:"${artist}"`),
-      ...titleVariants.slice(0, 3).map((t2) => `${t2} ${artist}`),
-      ...titleVariants.slice(0, 2).map((t2) => `${t2} ${artistDeabbrev}`)
+      `album:"${titleVariants[0]}" artist:"${artist}"`,
+      `${titleVariants[0]} ${artistDeabbrev}`
     ])];
-    for (const q of webQueries) {
-      try {
-        const response = await spotifyGet(searchUrl(q), priority);
-        const albums = response.albums?.items ?? [];
-        remember(albums);
-        const resolved2 = await finalizeCandidates(query, seen, priority);
-        if (resolved2) return { result: resolved2, hadError: false };
-      } catch {
-        hadError = true;
-      }
+    const webBatches = await Promise.all(
+      webQueries.map(async (q) => {
+        try {
+          const response = await spotifyGet(searchUrl(q), priority);
+          return response.albums?.items ?? [];
+        } catch {
+          hadError = true;
+          return [];
+        }
+      })
+    );
+    for (const batch of webBatches) remember(batch);
+    if (rankAlbumCandidates(query, [...seen.values()]).length > 0) {
+      await enrichWithDiscography();
+      const resolved2 = await finalizeCandidates(query, seen, priority);
+      if (resolved2) return { result: resolved2, hadError: false };
     }
     const artistId = await resolveArtistId(query, seen, remember, priority);
     if (artistId) {
+      let gqlCount = 0;
       if (!discogChecked) {
         discogChecked = true;
         const gqlDiscog = await discographyViaGraphQL(artistId, query.artistName, priority);
-        if (gqlDiscog.length) remember(gqlDiscog);
+        gqlCount = gqlDiscog.length;
+        if (gqlCount) remember(gqlDiscog);
       }
       const resolvedFromGql = await finalizeCandidates(query, seen, priority);
       if (resolvedFromGql) return { result: resolvedFromGql, hadError: false };
-      try {
-        for (let offset = 0; offset < 100; offset += 50) {
-          const page = await spotifyGet(
-            `https://api.spotify.com/v1/artists/${encodeURIComponent(artistId)}/albums?include_groups=album,single,compilation&limit=50&offset=${offset}`,
-            priority
-          );
-          const discography = page.items ?? [];
-          remember(discography);
-          const resolved2 = await finalizeCandidates(query, seen, priority);
-          if (resolved2) return { result: resolved2, hadError: false };
-          if (!page.next) break;
+      if (gqlCount === 0) {
+        try {
+          for (let offset = 0; offset < 100; offset += 50) {
+            const page = await spotifyGet(
+              `https://api.spotify.com/v1/artists/${encodeURIComponent(artistId)}/albums?include_groups=album,single,compilation&limit=50&offset=${offset}`,
+              priority
+            );
+            const discography = page.items ?? [];
+            remember(discography);
+            const resolved2 = await finalizeCandidates(query, seen, priority);
+            if (resolved2) return { result: resolved2, hadError: false };
+            if (!page.next) break;
+          }
+        } catch {
+          hadError = true;
         }
-      } catch {
-        hadError = true;
       }
     }
     const resolved = await finalizeCandidates(query, seen, priority);
@@ -1612,13 +1637,11 @@
   function findSpotifyAlbum(query, priority = false) {
     purgeLegacyCache();
     const cached = readCache3(query.mbid);
-    if (cached && (cached.uri || !priority)) {
+    if (cached) {
       return Promise.resolve(cached);
     }
-    if (!priority) {
-      const existing = memory2.get(query.mbid);
-      if (existing) return existing;
-    }
+    const existing = memory2.get(query.mbid);
+    if (existing) return existing;
     const pending = lookupAlbum(query, priority).then(({ result, hadError }) => {
       if (result.uri || result.cover || !hadError) {
         writeCache3(query.mbid, result);
@@ -1657,7 +1680,7 @@
     }
     return false;
   }
-  async function openAlbumInSpotify(query, waitMs = 9e3) {
+  async function openAlbumInSpotify(query, waitMs = 3500) {
     const cachedUri = peekCachedAlbumUri(query.mbid);
     const cachedPath = spotifyAlbumPath(cachedUri);
     if (cachedPath) {
@@ -1673,7 +1696,7 @@
     navigateInSpotify(albumPath ?? spotifySearchPath(query));
     return albumPath ? "album" : "search";
   }
-  async function playAlbumInSpotify(query, waitMs = 9e3) {
+  async function playAlbumInSpotify(query, waitMs = 3500) {
     let uri = peekCachedAlbumUri(query.mbid);
     if (!uri) {
       try {
@@ -1708,7 +1731,8 @@
   }
 
   // src/services/followed-artists.ts
-  var CACHE_KEY = "on-this-day:followed-artists:v1";
+  var CACHE_KEY = "on-this-day:followed-artists:v2";
+  var LEGACY_CACHE_KEY = "on-this-day:followed-artists:v1";
   var CACHE_FRESH_MS = 6 * 60 * 60 * 1e3;
   var PAGE_LIMIT = 50;
   var MAX_PAGES = 100;
@@ -1732,72 +1756,146 @@
     }
     return set;
   }
+  function buildFollowedArtistIndex(profiles) {
+    const names = /* @__PURE__ */ new Set();
+    const ids = /* @__PURE__ */ new Set();
+    const byName = /* @__PURE__ */ new Map();
+    for (const profile of profiles) {
+      const key = normalizeArtistName(profile.name);
+      if (!key) continue;
+      names.add(key);
+      if (profile.id) ids.add(profile.id);
+      const list = byName.get(key) ?? [];
+      list.push(profile);
+      byName.set(key, list);
+    }
+    return { names, ids, byName };
+  }
   function readCache4() {
     try {
       const parsed = JSON.parse(localStorage.getItem(CACHE_KEY) ?? "null");
-      if (parsed && Array.isArray(parsed.names) && typeof parsed.at === "number") return parsed;
+      if (parsed && Array.isArray(parsed.profiles) && typeof parsed.at === "number") return parsed;
+      const legacy = JSON.parse(localStorage.getItem(LEGACY_CACHE_KEY) ?? "null");
+      if (legacy && Array.isArray(legacy.names) && typeof legacy.at === "number") {
+        return {
+          profiles: legacy.names.filter((n) => typeof n === "string" && !!n.trim()).map((name) => ({ id: "", name, genres: [] })),
+          at: 0
+          // força atualização em segundo plano para obter os IDs e gêneros
+        };
+      }
     } catch {
     }
     return null;
   }
-  function writeCache4(names) {
+  function writeCache4(profiles) {
     try {
-      localStorage.setItem(CACHE_KEY, JSON.stringify({ names, at: Date.now() }));
+      localStorage.setItem(CACHE_KEY, JSON.stringify({ profiles, at: Date.now() }));
+      localStorage.removeItem(LEGACY_CACHE_KEY);
     } catch {
     }
   }
-  function peekFollowedArtists() {
+  function peekFollowedProfiles() {
     const cached = readCache4();
-    return cached?.names.length ? cached.names : null;
+    return cached?.profiles.length ? cached.profiles : null;
+  }
+  function extractArtistId(uriOrId) {
+    if (!uriOrId) return "";
+    const m = /^spotify:artist:([A-Za-z0-9]+)$/.exec(uriOrId);
+    if (m?.[1]) return m[1];
+    return /^[A-Za-z0-9]{22}$/.test(uriOrId) ? uriOrId : "";
   }
   async function fromWebApi() {
-    const names = [];
+    const profiles = [];
     let after = null;
     for (let page = 0; page < MAX_PAGES; page += 1) {
       const params = new URLSearchParams({ type: "artist", limit: String(PAGE_LIMIT) });
       if (after) params.set("after", after);
       const result = await spotifyGet(`https://api.spotify.com/v1/me/following?${params}`);
-      for (const artist of result.artists?.items ?? []) if (artist.name) names.push(artist.name);
+      for (const artist of result.artists?.items ?? []) {
+        if (!artist.name) continue;
+        profiles.push({
+          id: extractArtistId(artist.id ?? artist.uri),
+          name: artist.name,
+          genres: Array.isArray(artist.genres) ? artist.genres.filter((g) => typeof g === "string") : []
+        });
+      }
       after = result.artists?.cursors?.after ?? null;
       if (!after || !result.artists?.items?.length) break;
     }
-    return names;
+    return profiles;
   }
   async function fromLibrary() {
     const api = Spicetify?.Platform?.LibraryAPI;
     if (!api?.getContents) throw new Error("Biblioteca do Spotify indisponível");
-    const names = [];
+    const profiles = [];
     const limit = 500;
     for (let offset = 0; offset < 1e4; offset += limit) {
       const response = await api.getContents({ limit, offset });
       const items = response?.items ?? [];
-      for (const item of items) if (item.type === "artist" && item.name) names.push(item.name);
+      for (const item of items) {
+        if (item.type === "artist" && item.name) {
+          profiles.push({
+            id: extractArtistId(item.id ?? item.uri),
+            name: item.name,
+            genres: []
+          });
+        }
+      }
       if (items.length < limit) break;
     }
-    return names;
+    return profiles;
+  }
+  function dedupeProfiles(profiles) {
+    const byKey = /* @__PURE__ */ new Map();
+    for (const p of profiles) {
+      const key = p.id || normalizeArtistName(p.name);
+      if (!key) continue;
+      const prev = byKey.get(key);
+      if (!prev || !prev.genres.length && p.genres.length || !prev.id && p.id) {
+        byKey.set(key, p);
+      }
+    }
+    return [...byKey.values()];
   }
   async function loadFollowedArtists(force = false) {
     const cached = readCache4();
-    if (!force && cached && Date.now() - cached.at < CACHE_FRESH_MS) {
-      return { names: cached.names, fromCache: true, stale: false };
+    if (!force && cached && cached.at > 0 && Date.now() - cached.at < CACHE_FRESH_MS) {
+      return {
+        names: cached.profiles.map((p) => p.name),
+        profiles: cached.profiles,
+        fromCache: true,
+        stale: false
+      };
     }
-    let names = null;
+    let profiles = null;
     try {
-      names = await fromWebApi();
+      profiles = await fromWebApi();
     } catch {
     }
-    if (!names?.length) {
+    if (!profiles?.length) {
       try {
-        names = await fromLibrary();
+        profiles = await fromLibrary();
       } catch {
       }
     }
-    if (names?.length) {
-      const unique = [...new Set(names)];
+    if (profiles?.length) {
+      const unique = dedupeProfiles(profiles);
       writeCache4(unique);
-      return { names: unique, fromCache: false, stale: false };
+      return {
+        names: unique.map((p) => p.name),
+        profiles: unique,
+        fromCache: false,
+        stale: false
+      };
     }
-    if (cached) return { names: cached.names, fromCache: true, stale: true };
+    if (cached) {
+      return {
+        names: cached.profiles.map((p) => p.name),
+        profiles: cached.profiles,
+        fromCache: true,
+        stale: true
+      };
+    }
     throw new Error("Não foi possível ler os artistas que você segue no Spotify.");
   }
   function artistIsFollowed(followed, artistNames) {
@@ -1806,6 +1904,106 @@
       if (key && followed.has(key)) return true;
     }
     return false;
+  }
+  function genresCompatibleWithFollowed(itemGenres, artistNames, index) {
+    if (!itemGenres?.length) return true;
+    const itemMain = classifyMainGenres([...itemGenres]);
+    if (!itemMain.length) return true;
+    const matchedProfiles = [];
+    for (const name of artistNames) {
+      const key = normalizeArtistName(name);
+      const found = key ? index.byName.get(key) : void 0;
+      if (found?.length) matchedProfiles.push(...found);
+    }
+    if (!matchedProfiles.length) return true;
+    const profilesWithGenres = matchedProfiles.filter((p) => p.genres.length > 0);
+    if (!profilesWithGenres.length) return true;
+    const followedMain = new Set(profilesWithGenres.flatMap((p) => classifyMainGenres(p.genres)));
+    if (!followedMain.size) return true;
+    return itemMain.some((g) => followedMain.has(g));
+  }
+  function spotifyLookupMatchesFollowed(lookup, index) {
+    if (!lookup || !lookup.uri || !lookup.artists.length || !index.ids.size) return null;
+    const hasKnownIds = lookup.artists.some((a) => Boolean(a.id));
+    if (!hasKnownIds) return null;
+    return lookup.artists.some((a) => a.id && index.ids.has(a.id));
+  }
+  var VERIFY_CACHE_KEY = "on-this-day:followed-verify:v1";
+  var VERIFY_TTL_MS = 7 * 24 * 60 * 60 * 1e3;
+  var verifyMem = null;
+  var verifyDirty = 0;
+  function getVerifyMap() {
+    if (verifyMem) return verifyMem;
+    verifyMem = /* @__PURE__ */ new Map();
+    try {
+      const raw = localStorage.getItem(VERIFY_CACHE_KEY);
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        const now = Date.now();
+        for (const [k, v] of Object.entries(parsed)) {
+          if (v && typeof v.ok === "boolean" && typeof v.at === "number" && now - v.at < VERIFY_TTL_MS) {
+            verifyMem.set(k, v.ok);
+          }
+        }
+      }
+    } catch {
+    }
+    return verifyMem;
+  }
+  function saveVerifyDecision(mbid, ok) {
+    const map = getVerifyMap();
+    map.set(mbid, ok);
+    verifyDirty += 1;
+    if (verifyDirty < 5) return;
+    verifyDirty = 0;
+    try {
+      const out = {};
+      const now = Date.now();
+      const entries = [...map.entries()].slice(-1500);
+      for (const [k, v] of entries) out[k] = { ok: v, at: now };
+      localStorage.setItem(VERIFY_CACHE_KEY, JSON.stringify(out));
+    } catch {
+    }
+  }
+  function peekFollowedAlbumVerification(mbid) {
+    const val = getVerifyMap().get(mbid);
+    return typeof val === "boolean" ? val : null;
+  }
+  async function verifyFollowedAlbumWithSpotify(item, index) {
+    const cachedDecision = peekFollowedAlbumVerification(item.mbid);
+    if (cachedDecision !== null) return cachedDecision;
+    const artistNames = item.artistNames?.length ? item.artistNames : [item.artistName];
+    const matchedProfiles = [];
+    for (const name of artistNames) {
+      const key = normalizeArtistName(name);
+      const list = key ? index.byName.get(key) : void 0;
+      if (list?.length) matchedProfiles.push(...list);
+    }
+    const profilesWithId = matchedProfiles.filter((p) => Boolean(p.id));
+    const lookup = peekCachedAlbumLookup(item.mbid) ?? await findSpotifyAlbum(item).catch(() => null);
+    const directMatch = spotifyLookupMatchesFollowed(lookup, index);
+    if (directMatch === true) {
+      saveVerifyDecision(item.mbid, true);
+      return true;
+    }
+    if (directMatch === false) {
+      saveVerifyDecision(item.mbid, false);
+      return false;
+    }
+    if (profilesWithId.length) {
+      const checks = await Promise.all(
+        profilesWithId.map((p) => albumInArtistDiscography(item, p.id, p.name).catch(() => null))
+      );
+      if (checks.some((c) => c === true)) {
+        saveVerifyDecision(item.mbid, true);
+        return true;
+      }
+      if (checks.some((c) => c === false)) {
+        saveVerifyDecision(item.mbid, false);
+        return false;
+      }
+    }
+    return true;
   }
 
   // src/i18n.ts
@@ -1845,6 +2043,7 @@
       emptyGenresMsg: "The published catalog does not include genres yet. Update the catalog publication to enable this filter.",
       emptyNoMatch: "No albums from this date match the selected genres.",
       emptyFollowed: "No albums from the artists you follow were found on this date. Disable the filter to see all.",
+      emptyTypeFiltered: "No studio albums found here — some releases are hidden by the Release types filter (Live, Compilations, etc.).",
       emptyNone: "No albums found for this date and anniversary.",
       attribution: "Data: MusicBrainz. Order prioritizes community ratings when available. Click a cover to preview; double-click to open the album or search Spotify.",
       moreAlbums: "View more albums",
@@ -1948,7 +2147,26 @@
       sortCritic: "Critic score",
       sortCriticShort: "Critic",
       sortTitle: "Title (A–Z)",
-      sortTitleShort: "A–Z"
+      sortTitleShort: "A–Z",
+      releaseTypeBtn: "Release types",
+      releaseTypeTitle: "Show extra release types",
+      releaseTypeHint: "Studio albums are always shown. Unchecked categories stay hidden.",
+      releaseTypeStudioOnly: "Studio only",
+      releaseTypeShowAll: "Show all",
+      releaseType_collab: "Collaborative Albums (Duo / Trio)",
+      releaseType_compilation: "Greatest Hits & Compilations",
+      releaseType_live: "Live Albums & Concerts",
+      releaseType_remix: "Remixes, Instrumentals & Tributes",
+      releaseType_soundtrack: "Soundtracks & Scores (OST)",
+      releaseType_demos: "Demos, Rarities & B-Sides",
+      releaseType_mixtape: "Mixtapes & DJ Mixes",
+      releaseType_spoken: "Spoken Word & Audiobooks",
+      updChangelogTitle: "Changelog · v{version}",
+      updChangelogShow: "Show changelog",
+      updChangelogHide: "Hide changelog",
+      albumTagsTitle: "Cover labels",
+      albumTagsToggle: "Show category tags on covers",
+      albumTagsDesc: "Corner ribbon tags (COLLAB, LIVE, HITS…)"
     },
     pt: {
       eyebrow: "HISTÓRIA DA MÚSICA",
@@ -1979,6 +2197,7 @@
       emptyGenresMsg: "O catálogo publicado ainda não inclui gêneros. Atualize a publicação do catálogo para ativar este filtro.",
       emptyNoMatch: "Nenhum álbum desta data corresponde aos gêneros selecionados.",
       emptyFollowed: "Nenhum álbum dos artistas que você segue foi encontrado nesta data. Desative o filtro para ver todos.",
+      emptyTypeFiltered: "Nenhum álbum de estúdio encontrado — alguns lançamentos estão ocultos pelo filtro Tipos de álbum (Ao Vivo, Coletâneas, etc.).",
       emptyNone: "Nenhum álbum encontrado para este dia e aniversário.",
       attribution: "Dados: MusicBrainz. A ordem prioriza avaliações da comunidade quando disponíveis. Clique na capa para ampliar; clique duas vezes para abrir o álbum ou pesquisar no Spotify.",
       moreAlbums: "Ver mais álbuns",
@@ -2082,7 +2301,26 @@
       sortCritic: "Nota da Crítica",
       sortCriticShort: "Crítica",
       sortTitle: "Título (A–Z)",
-      sortTitleShort: "A–Z"
+      sortTitleShort: "A–Z",
+      releaseTypeBtn: "Tipos de álbum",
+      releaseTypeTitle: "Exibir outros tipos além de estúdio",
+      releaseTypeHint: "Álbuns de estúdio sempre aparecem. Categorias desmarcadas ficam ocultas.",
+      releaseTypeStudioOnly: "Só estúdio",
+      releaseTypeShowAll: "Mostrar tudo",
+      releaseType_collab: "Álbuns em Colaboração (Dupla / Trio)",
+      releaseType_compilation: "Coletâneas e Greatest Hits",
+      releaseType_live: "Álbuns Ao Vivo e Shows",
+      releaseType_remix: "Remixes, Instrumentais e Tributos",
+      releaseType_soundtrack: "Trilhas Sonoras (OST)",
+      releaseType_demos: "Demos, Raridades e B-Sides",
+      releaseType_mixtape: "Mixtapes e DJ Mixes",
+      releaseType_spoken: "Falados e Audiolivros",
+      updChangelogTitle: "Changelog · v{version}",
+      updChangelogShow: "Expandir changelog",
+      updChangelogHide: "Recolher changelog",
+      albumTagsTitle: "Etiquetas nas capas",
+      albumTagsToggle: "Exibir etiquetas de categoria",
+      albumTagsDesc: "Fita no canto da capa (COLLAB, LIVE, HITS…)"
     },
     es: {
       eyebrow: "HISTORIA DE LA MÚSICA",
@@ -2113,6 +2351,7 @@
       emptyGenresMsg: "El catálogo publicado aún no incluye géneros. Actualiza la publicación del catálogo para activar este filtro.",
       emptyNoMatch: "Ningún álbum de esta fecha coincide con los géneros seleccionados.",
       emptyFollowed: "No se encontraron álbumes de los artistas que sigues en esta fecha. Desactiva el filtro para ver todos.",
+      emptyTypeFiltered: "No se encontraron álbumes de estudio — algunos lanzamientos están ocultos por el filtro Tipos de álbum (En Vivo, Recopilatorios, etc.).",
       emptyNone: "No se encontraron álbumes para esta fecha y aniversario.",
       attribution: "Datos: MusicBrainz. El orden prioriza las calificaciones de la comunidad cuando están disponibles. Haz clic en la portada para ampliarla; doble clic para abrir el álbum o buscar en Spotify.",
       moreAlbums: "Ver más álbumes",
@@ -2216,7 +2455,26 @@
       sortCritic: "Nota de la Crítica",
       sortCriticShort: "Crítica",
       sortTitle: "Título (A–Z)",
-      sortTitleShort: "A–Z"
+      sortTitleShort: "A–Z",
+      releaseTypeBtn: "Tipos de álbum",
+      releaseTypeTitle: "Mostrar otros tipos además de estudio",
+      releaseTypeHint: "Los álbumes de estudio siempre se muestran. Las categorías sin marcar quedan ocultas.",
+      releaseTypeStudioOnly: "Solo estudio",
+      releaseTypeShowAll: "Mostrar todo",
+      releaseType_collab: "Álbumes en Colaboración (Dúo / Trío)",
+      releaseType_compilation: "Recopilatorios y Greatest Hits",
+      releaseType_live: "Álbumes en Vivo y Conciertos",
+      releaseType_remix: "Remixes, Instrumentales y Tributos",
+      releaseType_soundtrack: "Bandas Sonoras (OST)",
+      releaseType_demos: "Demos, Rarezas y B-Sides",
+      releaseType_mixtape: "Mixtapes y DJ Mixes",
+      releaseType_spoken: "Hablados y Audiolibros",
+      updChangelogTitle: "Changelog · v{version}",
+      updChangelogShow: "Expandir changelog",
+      updChangelogHide: "Ocultar changelog",
+      albumTagsTitle: "Etiquetas en portadas",
+      albumTagsToggle: "Mostrar etiquetas de categoría",
+      albumTagsDesc: "Cinta en la esquina (COLLAB, LIVE, HITS…)"
     }
   };
   function detectLang() {
@@ -2309,7 +2567,7 @@
   }
 
   // src/services/updates.ts
-  var APP_VERSION = true ? "1.1.15" : "0.0.0";
+  var APP_VERSION = true ? "1.1.16" : "0.0.0";
   var REPO = true ? "uWaazy/on-this-day" : "uWaazy/on-this-day";
   var REPO_URL = `https://github.com/${REPO}`;
   var RAW_BASE = `https://raw.githubusercontent.com/${REPO}/main`;
@@ -2389,10 +2647,38 @@
     }
   }
 
+  // src/components/AppIcon.tsx
+  function AppIcon({ size = 26 }) {
+    return /* @__PURE__ */ Spicetify.React.createElement("svg", { viewBox: "0 0 24 24", width: size, height: size, fill: "none", stroke: "currentColor", strokeWidth: "1.9", strokeLinecap: "round", strokeLinejoin: "round", "aria-hidden": "true" }, /* @__PURE__ */ Spicetify.React.createElement("rect", { x: "3.2", y: "4.8", width: "17.6", height: "16", rx: "4.2" }), /* @__PURE__ */ Spicetify.React.createElement("path", { d: "M8 2.6v3.6M16 2.6v3.6M3.4 9.8h17.2" }), /* @__PURE__ */ Spicetify.React.createElement("circle", { cx: "10.4", cy: "16.6", r: "1.75", fill: "currentColor", stroke: "none" }), /* @__PURE__ */ Spicetify.React.createElement("path", { d: "M12.15 16.6v-4.7l3.4 1.3" }));
+  }
+  function ChevronIcon({ size = 14 }) {
+    return /* @__PURE__ */ Spicetify.React.createElement("svg", { viewBox: "0 0 24 24", width: size, height: size, fill: "none", stroke: "currentColor", strokeWidth: "2.2", strokeLinecap: "round", strokeLinejoin: "round", "aria-hidden": "true" }, /* @__PURE__ */ Spicetify.React.createElement("path", { d: "m6 9 6 6 6-6" }));
+  }
+  function CheckIcon({ size = 14 }) {
+    return /* @__PURE__ */ Spicetify.React.createElement("svg", { viewBox: "0 0 24 24", width: size, height: size, fill: "none", stroke: "currentColor", strokeWidth: "2.6", strokeLinecap: "round", strokeLinejoin: "round", "aria-hidden": "true" }, /* @__PURE__ */ Spicetify.React.createElement("path", { d: "m5 12.5 4.5 4.5L19 7.500" }));
+  }
+  function GearIcon({ size = 16 }) {
+    return /* @__PURE__ */ Spicetify.React.createElement("svg", { viewBox: "0 0 24 24", width: size, height: size, fill: "none", stroke: "currentColor", strokeWidth: "1.9", strokeLinecap: "round", strokeLinejoin: "round", "aria-hidden": "true" }, /* @__PURE__ */ Spicetify.React.createElement("circle", { cx: "12", cy: "12", r: "3.2" }), /* @__PURE__ */ Spicetify.React.createElement("path", { d: "M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9c.26.604.852.997 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1Z" }));
+  }
+  function PlayIcon({ size = 14 }) {
+    return /* @__PURE__ */ Spicetify.React.createElement("svg", { viewBox: "0 0 24 24", width: size, height: size, fill: "currentColor", "aria-hidden": "true" }, /* @__PURE__ */ Spicetify.React.createElement("path", { d: "M7.05 3.606l13.49 7.788a.7.7 0 0 1 0 1.212L7.05 20.394A.7.7 0 0 1 6 19.788V4.212a.7.7 0 0 1 1.05-.606Z" }));
+  }
+  function SortIcon({ size = 14 }) {
+    return /* @__PURE__ */ Spicetify.React.createElement("svg", { viewBox: "0 0 24 24", width: size, height: size, fill: "none", stroke: "currentColor", strokeWidth: "2.1", strokeLinecap: "round", strokeLinejoin: "round", "aria-hidden": "true" }, /* @__PURE__ */ Spicetify.React.createElement("path", { d: "M3 6h18M7 12h10M10 18h4" }));
+  }
+
   // src/components/UpdateBadge.tsx
+  var LATEST_CHANGELOG_ITEMS = [
+    "Strict homonym & discography verification for Followed Artists (verifies Spotify artist IDs and real artist discographies so unrelated homonyms or non-catalog releases like 'Ye - God's Country' are excluded).",
+    "Automatic deduplication of duplicate albums in the same year (keeps the primary edition cleanly).",
+    "Faster fallback (< 1s) when opening albums not available on Spotify.",
+    "8-category Release Type Filter (includes Collaborative Duo/Trio albums enabled by default, plus hideable Compilations, Live, Remixes, Soundtracks, Demos, Mixtapes & Spoken Word).",
+    "Optional corner ribbon tags on album covers (COLLAB, LIVE, HITS, REMIX, OST, etc.), toggleable in Settings."
+  ];
   function UpdateBadge({ lang }) {
     const [info, setInfo] = useState(peekUpdate);
     const [open, setOpen] = useState(false);
+    const [changelogOpen, setChangelogOpen] = useState(false);
     const [copied, setCopied] = useState(false);
     const closeRef = useRef(null);
     const copyTimer = useRef(null);
@@ -2455,29 +2741,20 @@
       /* @__PURE__ */ Spicetify.React.createElement("span", null, "v", APP_VERSION),
       info.hasUpdate && /* @__PURE__ */ Spicetify.React.createElement("span", { className: "otd-version-new" }, "↑ v", info.latest)
     ), open && createPortal(
-      /* @__PURE__ */ Spicetify.React.createElement("div", { className: "otd-update-backdrop", role: "presentation", onClick: () => setOpen(false) }, /* @__PURE__ */ Spicetify.React.createElement("div", { className: "otd-update-dialog", role: "dialog", "aria-modal": "true", "aria-label": t(lang, "updTitleNew"), onClick: (event) => event.stopPropagation() }, /* @__PURE__ */ Spicetify.React.createElement("div", { className: "otd-update-head" }, /* @__PURE__ */ Spicetify.React.createElement("div", null, /* @__PURE__ */ Spicetify.React.createElement("h2", null, info.hasUpdate ? t(lang, "updTitleNew") : t(lang, "updTitleCurrent")), /* @__PURE__ */ Spicetify.React.createElement("p", { className: "otd-update-versions" }, t(lang, "updInstalled"), ": ", /* @__PURE__ */ Spicetify.React.createElement("strong", null, "v", APP_VERSION), info.latest && /* @__PURE__ */ Spicetify.React.createElement(Spicetify.React.Fragment, null, " · ", t(lang, "updLatest"), ": ", /* @__PURE__ */ Spicetify.React.createElement("strong", { className: info.hasUpdate ? "is-new" : "" }, "v", info.latest))), !info.latest && /* @__PURE__ */ Spicetify.React.createElement("p", { className: "otd-update-warn" }, t(lang, "updCheckFailed"))), /* @__PURE__ */ Spicetify.React.createElement("button", { ref: closeRef, type: "button", className: "otd-update-close", onClick: () => setOpen(false), "aria-label": t(lang, "updClose") }, "✕")), /* @__PURE__ */ Spicetify.React.createElement("section", { className: "otd-update-block" }, /* @__PURE__ */ Spicetify.React.createElement("h3", null, /* @__PURE__ */ Spicetify.React.createElement("span", { className: "otd-update-tag" }, t(lang, "updRecommended")), " ", t(lang, "updRawTitle")), /* @__PURE__ */ Spicetify.React.createElement("p", null, t(lang, "updRawHint")), /* @__PURE__ */ Spicetify.React.createElement("div", { className: "otd-update-command" }, /* @__PURE__ */ Spicetify.React.createElement("code", null, INSTALL_COMMAND), /* @__PURE__ */ Spicetify.React.createElement("button", { type: "button", className: copied ? "is-copied" : "", onClick: copyCommand }, copied ? t(lang, "updCopied") : t(lang, "updCopy")))), /* @__PURE__ */ Spicetify.React.createElement("section", { className: "otd-update-block" }, /* @__PURE__ */ Spicetify.React.createElement("h3", null, t(lang, "updManualTitle")), /* @__PURE__ */ Spicetify.React.createElement("ol", null, /* @__PURE__ */ Spicetify.React.createElement("li", null, t(lang, "updManual1")), /* @__PURE__ */ Spicetify.React.createElement("li", null, t(lang, "updManual2"), " ", /* @__PURE__ */ Spicetify.React.createElement("code", null, "%appdata%\\spicetify\\CustomApps\\on-this-day")), /* @__PURE__ */ Spicetify.React.createElement("li", null, t(lang, "updManual3"), " ", /* @__PURE__ */ Spicetify.React.createElement("code", null, "spicetify config custom_apps on-this-day"), " → ", /* @__PURE__ */ Spicetify.React.createElement("code", null, "spicetify apply")))), /* @__PURE__ */ Spicetify.React.createElement("div", { className: "otd-update-actions" }, /* @__PURE__ */ Spicetify.React.createElement("a", { className: "otd-update-link", href: REPO_URL, target: "_blank", rel: "noopener noreferrer" }, t(lang, "updOpenGithub")), /* @__PURE__ */ Spicetify.React.createElement("button", { type: "button", className: "otd-update-done", onClick: () => setOpen(false) }, t(lang, "updClose"))))),
+      /* @__PURE__ */ Spicetify.React.createElement("div", { className: "otd-update-backdrop", role: "presentation", onClick: () => setOpen(false) }, /* @__PURE__ */ Spicetify.React.createElement("div", { className: "otd-update-dialog", role: "dialog", "aria-modal": "true", "aria-label": t(lang, "updTitleNew"), onClick: (event) => event.stopPropagation() }, /* @__PURE__ */ Spicetify.React.createElement("div", { className: "otd-update-head" }, /* @__PURE__ */ Spicetify.React.createElement("div", null, /* @__PURE__ */ Spicetify.React.createElement("h2", null, info.hasUpdate ? t(lang, "updTitleNew") : t(lang, "updTitleCurrent")), /* @__PURE__ */ Spicetify.React.createElement("p", { className: "otd-update-versions" }, t(lang, "updInstalled"), ": ", /* @__PURE__ */ Spicetify.React.createElement("strong", null, "v", APP_VERSION), info.latest && /* @__PURE__ */ Spicetify.React.createElement(Spicetify.React.Fragment, null, " · ", t(lang, "updLatest"), ": ", /* @__PURE__ */ Spicetify.React.createElement("strong", { className: info.hasUpdate ? "is-new" : "" }, "v", info.latest))), !info.latest && /* @__PURE__ */ Spicetify.React.createElement("p", { className: "otd-update-warn" }, t(lang, "updCheckFailed"))), /* @__PURE__ */ Spicetify.React.createElement("button", { ref: closeRef, type: "button", className: "otd-update-close", onClick: () => setOpen(false), "aria-label": t(lang, "updClose") }, "✕")), /* @__PURE__ */ Spicetify.React.createElement("section", { className: "otd-update-block" }, /* @__PURE__ */ Spicetify.React.createElement("h3", null, /* @__PURE__ */ Spicetify.React.createElement("span", { className: "otd-update-tag" }, t(lang, "updRecommended")), " ", t(lang, "updRawTitle")), /* @__PURE__ */ Spicetify.React.createElement("p", null, t(lang, "updRawHint")), /* @__PURE__ */ Spicetify.React.createElement("div", { className: "otd-update-command" }, /* @__PURE__ */ Spicetify.React.createElement("code", null, INSTALL_COMMAND), /* @__PURE__ */ Spicetify.React.createElement("button", { type: "button", className: copied ? "is-copied" : "", onClick: copyCommand }, copied ? t(lang, "updCopied") : t(lang, "updCopy")))), /* @__PURE__ */ Spicetify.React.createElement("section", { className: "otd-update-block otd-changelog-block" }, /* @__PURE__ */ Spicetify.React.createElement(
+        "button",
+        {
+          type: "button",
+          className: `otd-changelog-toggle${changelogOpen ? " is-open" : ""}`,
+          "aria-expanded": changelogOpen,
+          "aria-label": changelogOpen ? t(lang, "updChangelogHide") : t(lang, "updChangelogShow"),
+          onClick: () => setChangelogOpen((v) => !v)
+        },
+        /* @__PURE__ */ Spicetify.React.createElement("span", { className: "otd-changelog-title" }, t(lang, "updChangelogTitle", { version: info.latest ?? APP_VERSION })),
+        /* @__PURE__ */ Spicetify.React.createElement("span", { className: "otd-changelog-chevron", "aria-hidden": "true" }, /* @__PURE__ */ Spicetify.React.createElement(ChevronIcon, { size: 15 }))
+      ), changelogOpen && /* @__PURE__ */ Spicetify.React.createElement("ul", { className: "otd-changelog-list" }, LATEST_CHANGELOG_ITEMS.map((entry, idx) => /* @__PURE__ */ Spicetify.React.createElement("li", { key: idx }, entry)))), /* @__PURE__ */ Spicetify.React.createElement("section", { className: "otd-update-block" }, /* @__PURE__ */ Spicetify.React.createElement("h3", null, t(lang, "updManualTitle")), /* @__PURE__ */ Spicetify.React.createElement("ol", null, /* @__PURE__ */ Spicetify.React.createElement("li", null, t(lang, "updManual1")), /* @__PURE__ */ Spicetify.React.createElement("li", null, t(lang, "updManual2"), " ", /* @__PURE__ */ Spicetify.React.createElement("code", null, "%appdata%\\spicetify\\CustomApps\\on-this-day")), /* @__PURE__ */ Spicetify.React.createElement("li", null, t(lang, "updManual3"), " ", /* @__PURE__ */ Spicetify.React.createElement("code", null, "spicetify config custom_apps on-this-day"), " → ", /* @__PURE__ */ Spicetify.React.createElement("code", null, "spicetify apply")))), /* @__PURE__ */ Spicetify.React.createElement("div", { className: "otd-update-actions" }, /* @__PURE__ */ Spicetify.React.createElement("a", { className: "otd-update-link", href: REPO_URL, target: "_blank", rel: "noopener noreferrer" }, t(lang, "updOpenGithub")), /* @__PURE__ */ Spicetify.React.createElement("button", { type: "button", className: "otd-update-done", onClick: () => setOpen(false) }, t(lang, "updClose"))))),
       document.body
     ));
-  }
-
-  // src/components/AppIcon.tsx
-  function AppIcon({ size = 26 }) {
-    return /* @__PURE__ */ Spicetify.React.createElement("svg", { viewBox: "0 0 24 24", width: size, height: size, fill: "none", stroke: "currentColor", strokeWidth: "1.9", strokeLinecap: "round", strokeLinejoin: "round", "aria-hidden": "true" }, /* @__PURE__ */ Spicetify.React.createElement("rect", { x: "3.2", y: "4.8", width: "17.6", height: "16", rx: "4.2" }), /* @__PURE__ */ Spicetify.React.createElement("path", { d: "M8 2.6v3.6M16 2.6v3.6M3.4 9.8h17.2" }), /* @__PURE__ */ Spicetify.React.createElement("circle", { cx: "10.4", cy: "16.6", r: "1.75", fill: "currentColor", stroke: "none" }), /* @__PURE__ */ Spicetify.React.createElement("path", { d: "M12.15 16.6v-4.7l3.4 1.3" }));
-  }
-  function ChevronIcon({ size = 14 }) {
-    return /* @__PURE__ */ Spicetify.React.createElement("svg", { viewBox: "0 0 24 24", width: size, height: size, fill: "none", stroke: "currentColor", strokeWidth: "2.2", strokeLinecap: "round", strokeLinejoin: "round", "aria-hidden": "true" }, /* @__PURE__ */ Spicetify.React.createElement("path", { d: "m6 9 6 6 6-6" }));
-  }
-  function CheckIcon({ size = 14 }) {
-    return /* @__PURE__ */ Spicetify.React.createElement("svg", { viewBox: "0 0 24 24", width: size, height: size, fill: "none", stroke: "currentColor", strokeWidth: "2.6", strokeLinecap: "round", strokeLinejoin: "round", "aria-hidden": "true" }, /* @__PURE__ */ Spicetify.React.createElement("path", { d: "m5 12.5 4.5 4.5L19 7.500" }));
-  }
-  function GearIcon({ size = 16 }) {
-    return /* @__PURE__ */ Spicetify.React.createElement("svg", { viewBox: "0 0 24 24", width: size, height: size, fill: "none", stroke: "currentColor", strokeWidth: "1.9", strokeLinecap: "round", strokeLinejoin: "round", "aria-hidden": "true" }, /* @__PURE__ */ Spicetify.React.createElement("circle", { cx: "12", cy: "12", r: "3.2" }), /* @__PURE__ */ Spicetify.React.createElement("path", { d: "M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9c.26.604.852.997 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1Z" }));
-  }
-  function PlayIcon({ size = 14 }) {
-    return /* @__PURE__ */ Spicetify.React.createElement("svg", { viewBox: "0 0 24 24", width: size, height: size, fill: "currentColor", "aria-hidden": "true" }, /* @__PURE__ */ Spicetify.React.createElement("path", { d: "M7.05 3.606l13.49 7.788a.7.7 0 0 1 0 1.212L7.05 20.394A.7.7 0 0 1 6 19.788V4.212a.7.7 0 0 1 1.05-.606Z" }));
-  }
-  function SortIcon({ size = 14 }) {
-    return /* @__PURE__ */ Spicetify.React.createElement("svg", { viewBox: "0 0 24 24", width: size, height: size, fill: "none", stroke: "currentColor", strokeWidth: "2.1", strokeLinecap: "round", strokeLinejoin: "round", "aria-hidden": "true" }, /* @__PURE__ */ Spicetify.React.createElement("path", { d: "M3 6h18M7 12h10M10 18h4" }));
   }
 
   // src/services/view-state.ts
@@ -3075,11 +3352,134 @@
     return vB - vA || a.title.localeCompare(b.title);
   }
 
+  // src/services/album-types.ts
+  var ALBUM_RELEASE_CATEGORIES = [
+    "collab",
+    "compilation",
+    "live",
+    "remix",
+    "soundtrack",
+    "demos",
+    "mixtape",
+    "spoken"
+  ];
+  var STORAGE_KEY3 = "on-this-day:album-type-filter:v1";
+  var SHOW_TAGS_KEY = "on-this-day:show-album-tags:v1";
+  function getShowAlbumTags() {
+    try {
+      const saved = localStorage.getItem(SHOW_TAGS_KEY);
+      if (saved === "false") return false;
+      if (saved === "true") return true;
+    } catch {
+    }
+    return true;
+  }
+  function setShowAlbumTags(enabled) {
+    try {
+      localStorage.setItem(SHOW_TAGS_KEY, String(enabled));
+    } catch {
+    }
+  }
+  function defaultAlbumTypeFilter() {
+    return {
+      collab: true,
+      compilation: false,
+      live: false,
+      remix: false,
+      soundtrack: false,
+      demos: false,
+      mixtape: false,
+      spoken: false
+    };
+  }
+  function allEnabledAlbumTypeFilter() {
+    return {
+      collab: true,
+      compilation: true,
+      live: true,
+      remix: true,
+      soundtrack: true,
+      demos: true,
+      mixtape: true,
+      spoken: true
+    };
+  }
+  function getAlbumTypeFilter() {
+    const base = defaultAlbumTypeFilter();
+    try {
+      const raw = localStorage.getItem(STORAGE_KEY3);
+      if (!raw) return base;
+      const parsed = JSON.parse(raw);
+      if (!parsed || typeof parsed !== "object") return base;
+      for (const key of ALBUM_RELEASE_CATEGORIES) {
+        if (typeof parsed[key] === "boolean") base[key] = parsed[key];
+      }
+    } catch {
+    }
+    return base;
+  }
+  function setAlbumTypeFilter(filter) {
+    try {
+      localStorage.setItem(STORAGE_KEY3, JSON.stringify(filter));
+    } catch {
+    }
+  }
+  var VARIOUS_ARTISTS_RE = /^(various artists?|v[aá]rios artistas?|v[aá]rios int[eé]rpretes)$/i;
+  var COMPILATION_RE = /\b(greatest hits|best of|the best of|essential|definitive|ultimate|anthology|collected|collection|all[- ]time hits|singles collection|the singles|complete recordings|complete studio|box set|retrospective|chronicles|maiores sucessos|as melhores|grandes [eé]xitos|lo mejor de|19\d\d\s*[-–—]\s*\d{2,4}|20\d\d\s*[-–—]\s*\d{2,4})\b|^(hits|gold|classics)$/i;
+  var LIVE_RE = /\b(apple music live|amazon music live|spotify live|tiny desk|live lounge|boiler room|vevo live|ao vivo|en vivo|en directo|in concert|concert tour|mtv unplugged|unplugged|bootleg|double live|live at|live in|live on|live from|live session|live sessions|live recording|live recordings|live performance|live album|live version|live experience|live tour)\b|\blive\s*[:–—-]|\(\s*live[^)]*\)|\[\s*live[^\]]*\]|\blive\s+(?:19|20)\d{2}\b|\s+live$/i;
+  var REMIX_RE = /\b(remix(es|ed)?|reimagined|reworked|chopped\s*(&|and|n)?\s*screwed|screwed\s*(&|and)?\s*chopped|slowed|sped up|instrumentals?|acapella|karaoke|tribute to|a tribute)\b/i;
+  var SOUNDTRACK_RE = /\b(soundtrack|original score|motion picture|o\.s\.t\.?|ost|music from the (film|movie|series|game|show)|original (television|tv|video game|anime|broadway|cast) (soundtrack|score|recording))\b/i;
+  var DEMOS_RE = /\b(demos?|rarities|b[- ]?sides|outtakes|bbc sessions|peel sessions|unreleased|from the vault|rough mixes)\b/i;
+  var MIXTAPE_RE = /\b(mixtape|dj[- ]kicks|fabriclive|back to mine|continuous mix)\b/i;
+  var SPOKEN_RE = /\b(audiobook|spoken word|interview|radio broadcast|podcast|stand[- ]up)\b/i;
+  function classifyAlbumReleaseCategory(item) {
+    const sec = (item.secondaryTypes ?? []).map((s) => s.toLowerCase());
+    if (sec.includes("spokenword") || sec.includes("audiobook") || sec.includes("interview") || sec.includes("audio drama")) return "spoken";
+    if (sec.includes("soundtrack")) return "soundtrack";
+    if (sec.includes("remix")) return "remix";
+    if (sec.includes("live")) return "live";
+    if (sec.includes("demo")) return "demos";
+    if (sec.includes("mixtape/street") || sec.includes("dj-mix")) return "mixtape";
+    if (sec.includes("compilation")) return "compilation";
+    const title = item.title ?? "";
+    const artist = item.artistName?.trim() ?? "";
+    if (SPOKEN_RE.test(title)) return "spoken";
+    if (SOUNDTRACK_RE.test(title)) return "soundtrack";
+    if (REMIX_RE.test(title)) return "remix";
+    if (LIVE_RE.test(title)) return "live";
+    if (DEMOS_RE.test(title)) return "demos";
+    if (MIXTAPE_RE.test(title)) return "mixtape";
+    if (VARIOUS_ARTISTS_RE.test(artist) || COMPILATION_RE.test(title)) return "compilation";
+    const spotifyCached = item.mbid ? peekCachedAlbumLookup(item.mbid) : null;
+    if (spotifyCached?.albumType === "compilation") return "compilation";
+    const mainArtists = (item.artistNames ?? []).filter((n) => n && !VARIOUS_ARTISTS_RE.test(n.trim()));
+    if (mainArtists.length >= 2 || (spotifyCached?.artists?.length ?? 0) >= 2) {
+      return "collab";
+    }
+    return null;
+  }
+  function shouldShowAlbumByType(item, filter) {
+    const category = classifyAlbumReleaseCategory(item);
+    if (!category) return true;
+    return filter[category] === true;
+  }
+  var RELEASE_TAG_LABELS = {
+    collab: "COLLAB",
+    live: "LIVE",
+    compilation: "HITS",
+    remix: "REMIX",
+    soundtrack: "OST",
+    demos: "DEMO",
+    mixtape: "MIXTAPE",
+    spoken: "SPOKEN"
+  };
+
   // src/components/AlbumCard.tsx
   var SINGLE_CLICK_DELAY_MS = 280;
   var FAST_RACE_MS = 1400;
-  var AlbumCard = memo(function AlbumCard2({ item, lang, onPreview }) {
+  var AlbumCard = memo(function AlbumCard2({ item, lang, showTag = true, onPreview }) {
     const year = item.firstReleaseDate.slice(0, 4);
+    const releaseCategory = showTag ? classifyAlbumReleaseCategory(item) : null;
     const [hasCover, setHasCover] = useState(() => !peekNoCover(item.mbid));
     const srcKind = useRef(null);
     const [coverSrc, setCoverSrc] = useState(() => {
@@ -3298,6 +3698,14 @@
           onError: handleCoverError
         }
       )) : /* @__PURE__ */ Spicetify.React.createElement("div", { className: "otd-cover-placeholder", "aria-hidden": "true" }, "♫")
+    ), releaseCategory && /* @__PURE__ */ Spicetify.React.createElement(
+      "span",
+      {
+        className: `otd-cover-tag otd-cover-tag--${releaseCategory}`,
+        title: t(lang, `releaseType_${releaseCategory}`),
+        "aria-label": t(lang, `releaseType_${releaseCategory}`)
+      },
+      RELEASE_TAG_LABELS[releaseCategory]
     ), /* @__PURE__ */ Spicetify.React.createElement("div", { className: "otd-cover-actions" }, /* @__PURE__ */ Spicetify.React.createElement(
       "button",
       {
@@ -3323,7 +3731,7 @@
   });
 
   // src/services/birthday-profile.ts
-  var STORAGE_KEY3 = "on-this-day:birthday-profiles:v1";
+  var STORAGE_KEY4 = "on-this-day:birthday-profiles:v1";
   var HIT_TTL2 = 30 * 24 * 60 * 60 * 1e3;
   var MISS_TTL2 = 6 * 60 * 60 * 1e3;
   var MAX_ENTRIES2 = 600;
@@ -3336,7 +3744,7 @@
     if (store2) return store2;
     store2 = {};
     try {
-      const parsed = JSON.parse(localStorage.getItem(STORAGE_KEY3) ?? "null");
+      const parsed = JSON.parse(localStorage.getItem(STORAGE_KEY4) ?? "null");
       if (parsed && typeof parsed === "object") store2 = parsed;
     } catch {
     }
@@ -3353,7 +3761,7 @@
         for (const key of keys.slice(0, keys.length - MAX_ENTRIES2)) delete current2[key];
       }
       try {
-        localStorage.setItem(STORAGE_KEY3, JSON.stringify(current2));
+        localStorage.setItem(STORAGE_KEY4, JSON.stringify(current2));
       } catch {
       }
     }, 1500);
@@ -3944,7 +4352,7 @@
   function BackIcon({ size = 14 }) {
     return /* @__PURE__ */ Spicetify.React.createElement("svg", { viewBox: "0 0 24 24", width: size, height: size, fill: "none", stroke: "currentColor", strokeWidth: "2.2", strokeLinecap: "round", strokeLinejoin: "round", "aria-hidden": "true" }, /* @__PURE__ */ Spicetify.React.createElement("path", { d: "M19 12H5M11 6l-6 6 6 6" }));
   }
-  var AnniversarySection = memo(function AnniversarySection2({ year, items, currentYear, lang, dayKey, sectionRef, onPreview }) {
+  var AnniversarySection = memo(function AnniversarySection2({ year, items, currentYear, lang, showTags, dayKey, sectionRef, onPreview }) {
     const expandedKey = `a:${dayKey}:${year}`;
     const [visibleCount, setVisibleCountState] = useState(() => getExpanded(expandedKey, INITIAL_ALBUMS_PER_YEAR));
     const setVisibleCount = (next) => {
@@ -3957,7 +4365,7 @@
     const visibleItems = items.slice(0, visibleCount);
     const anniversaryAge = currentYear - year;
     const isOne = anniversaryAge === 1;
-    return /* @__PURE__ */ Spicetify.React.createElement("section", { className: "otd-year-section", ref: sectionRef, "aria-label": t(lang, isOne ? "yearAgo" : "yearsAgo", { age: anniversaryAge, year }) }, /* @__PURE__ */ Spicetify.React.createElement("header", { className: "otd-year-heading" }, /* @__PURE__ */ Spicetify.React.createElement("div", null, /* @__PURE__ */ Spicetify.React.createElement("h2", null, t(lang, isOne ? "yearAgo" : "yearsAgo", { age: anniversaryAge, year }), " ", /* @__PURE__ */ Spicetify.React.createElement("span", null, "· ", year)), /* @__PURE__ */ Spicetify.React.createElement("p", null, t(lang, "albumsCount", { count: items.length.toLocaleString(lang) })))), /* @__PURE__ */ Spicetify.React.createElement("div", { className: "otd-album-grid" }, visibleItems.map((item) => /* @__PURE__ */ Spicetify.React.createElement(AlbumCard, { key: item.mbid, item, lang, onPreview }))), /* @__PURE__ */ Spicetify.React.createElement("div", { className: "otd-year-actions" }, visibleCount < items.length && /* @__PURE__ */ Spicetify.React.createElement(
+    return /* @__PURE__ */ Spicetify.React.createElement("section", { className: "otd-year-section", ref: sectionRef, "aria-label": t(lang, isOne ? "yearAgo" : "yearsAgo", { age: anniversaryAge, year }) }, /* @__PURE__ */ Spicetify.React.createElement("header", { className: "otd-year-heading" }, /* @__PURE__ */ Spicetify.React.createElement("div", null, /* @__PURE__ */ Spicetify.React.createElement("h2", null, t(lang, isOne ? "yearAgo" : "yearsAgo", { age: anniversaryAge, year }), " ", /* @__PURE__ */ Spicetify.React.createElement("span", null, "· ", year)), /* @__PURE__ */ Spicetify.React.createElement("p", null, t(lang, "albumsCount", { count: items.length.toLocaleString(lang) })))), /* @__PURE__ */ Spicetify.React.createElement("div", { className: "otd-album-grid" }, visibleItems.map((item) => /* @__PURE__ */ Spicetify.React.createElement(AlbumCard, { key: item.mbid, item, lang, showTag: showTags, onPreview }))), /* @__PURE__ */ Spicetify.React.createElement("div", { className: "otd-year-actions" }, visibleCount < items.length && /* @__PURE__ */ Spicetify.React.createElement(
       "button",
       {
         className: "otd-year-more",
@@ -3985,10 +4393,12 @@
     const [onlyFollowedAlbums, setOnlyFollowedAlbums] = useState(readOnlyFollowed);
     const [onlyFollowedBirthdays, setOnlyFollowedBirthdays] = useState(readOnlyFollowedBirthdays);
     const onlyFollowed = tab === "albums" ? onlyFollowedAlbums : onlyFollowedBirthdays;
-    const initialFollowed = useMemo(() => onlyFollowedAlbums || onlyFollowedBirthdays ? peekFollowedArtists() : null, []);
-    const [followStatus, setFollowStatus] = useState(initialFollowed ? "ready" : "idle");
-    const [followedSet, setFollowedSet] = useState(() => initialFollowed ? buildFollowedArtistSet(initialFollowed) : null);
-    const [followedCount, setFollowedCount] = useState(() => initialFollowed ? buildFollowedArtistSet(initialFollowed).size : 0);
+    const initialProfiles = useMemo(() => onlyFollowedAlbums || onlyFollowedBirthdays ? peekFollowedProfiles() : null, []);
+    const [followStatus, setFollowStatus] = useState(initialProfiles ? "ready" : "idle");
+    const [followedSet, setFollowedSet] = useState(() => initialProfiles ? buildFollowedArtistSet(initialProfiles.map((p) => p.name)) : null);
+    const [followedIndex, setFollowedIndex] = useState(() => initialProfiles ? buildFollowedArtistIndex(initialProfiles) : null);
+    const [followedCount, setFollowedCount] = useState(() => initialProfiles ? buildFollowedArtistSet(initialProfiles.map((p) => p.name)).size : 0);
+    const [rejectedHomonyms, setRejectedHomonyms] = useState(() => /* @__PURE__ */ new Set());
     const [yearOrder, setYearOrder] = useState(readYearOrder);
     const [activeYear, setActiveYear] = useState(null);
     const followRequest = useRef(0);
@@ -4009,6 +4419,9 @@
     const [albumVersion, setAlbumVersion] = useState(getAlbumVersionPref);
     const [albumSort, setAlbumSort] = useState(getAlbumSortMode);
     const [sortMenuOpen, setSortMenuOpen] = useState(false);
+    const [albumTypeFilter, setAlbumTypeFilterState] = useState(getAlbumTypeFilter);
+    const [showAlbumTags, setShowAlbumTagsState] = useState(getShowAlbumTags);
+    const [typeMenuOpen, setTypeMenuOpen] = useState(false);
     const [scoreTick, setScoreTick] = useState(0);
     const [preview, setPreview] = useState(null);
     const [navHover, setNavHover] = useState(false);
@@ -4047,17 +4460,19 @@
     const state = catalog ? "ready" : error ? "error" : "loading";
     useEffect(() => subscribeAlbumScores(() => setScoreTick((n) => n + 1)), []);
     useEffect(() => {
-      if (!settingsOpen && !sortMenuOpen) return;
+      if (!settingsOpen && !sortMenuOpen && !typeMenuOpen) return;
       const onPointerDown = (event) => {
         const target = event.target;
         if (target?.closest?.(".otd-settings")) return;
         setSettingsOpen(false);
         setSortMenuOpen(false);
+        setTypeMenuOpen(false);
       };
       const onKeyDown = (event) => {
         if (event.key === "Escape") {
           setSettingsOpen(false);
           setSortMenuOpen(false);
+          setTypeMenuOpen(false);
         }
       };
       document.addEventListener("mousedown", onPointerDown);
@@ -4066,7 +4481,7 @@
         document.removeEventListener("mousedown", onPointerDown);
         document.removeEventListener("keydown", onKeyDown);
       };
-    }, [settingsOpen, sortMenuOpen]);
+    }, [settingsOpen, sortMenuOpen, typeMenuOpen]);
     useEffect(() => {
       const nextMidnight = new Date(today.getFullYear(), today.getMonth(), today.getDate() + 1);
       const timeout = window.setTimeout(
@@ -4142,6 +4557,7 @@
         if (id !== followRequest.current) return;
         const nextSet = buildFollowedArtistSet(result.names);
         setFollowedSet(nextSet);
+        setFollowedIndex(buildFollowedArtistIndex(result.profiles));
         setFollowedCount(nextSet.size);
         setFollowStatus("ready");
       }).catch(() => {
@@ -4192,30 +4608,75 @@
     }
     const fabState = !onlyFollowed ? "off" : followStatus === "error" ? "error" : followStatus === "ready" ? "on" : "loading";
     const anniversaryItems = useMemo(() => {
-      return items.filter((item) => {
+      const filtered = items.filter((item) => {
         const year = getAnniversaryYear(item.firstReleaseDate);
         if (year === null || year >= currentYear || item.firstReleaseDate.slice(5) !== monthDay) return false;
         if (!normalizeText(item.title) || !hasValidArtistName(item.artistName)) return false;
         return true;
       }).sort(
-        (a, b) => Number(b.firstReleaseDate.slice(0, 4)) - Number(a.firstReleaseDate.slice(0, 4)) || (b.ratingVotes ?? 0) - (a.ratingVotes ?? 0) || (b.ratingValue ?? 0) - (a.ratingValue ?? 0) || a.title.localeCompare(b.title)
+        (a, b) => Number(b.firstReleaseDate.slice(0, 4)) - Number(a.firstReleaseDate.slice(0, 4)) || (b.ratingVotes ?? 0) - (a.ratingVotes ?? 0) || (b.ratingValue ?? 0) - (a.ratingValue ?? 0) || (b.genres?.length ?? 0) - (a.genres?.length ?? 0) || a.title.length - b.title.length || a.title.localeCompare(b.title)
       );
+      const seenAlbums = /* @__PURE__ */ new Set();
+      const deduped = [];
+      for (const item of filtered) {
+        const year = item.firstReleaseDate.slice(0, 4);
+        const dedupeKey = `${year}|${baseTitle(item.title)}|${normalizeText(item.artistName)}`;
+        if (seenAlbums.has(dedupeKey)) continue;
+        seenAlbums.add(dedupeKey);
+        deduped.push(item);
+      }
+      return deduped;
     }, [items, monthDay, currentYear]);
-    const displayedItems = useMemo(() => {
+    const followedCandidates = useMemo(() => {
       if (!onlyFollowedAlbums) return anniversaryItems;
       if (followStatus === "error") return anniversaryItems;
       if (followStatus !== "ready" || !followedSet) return [];
-      return anniversaryItems.filter(
-        (item) => artistIsFollowed(followedSet, item.artistNames?.length ? item.artistNames : [item.artistName])
-      );
-    }, [anniversaryItems, onlyFollowedAlbums, followStatus, followedSet]);
+      return anniversaryItems.filter((item) => {
+        if (peekFollowedAlbumVerification(item.mbid) === false) return false;
+        const names = item.artistNames?.length ? item.artistNames : [item.artistName];
+        if (!artistIsFollowed(followedSet, names)) return false;
+        if (followedIndex && !genresCompatibleWithFollowed(item.genres, names, followedIndex)) return false;
+        return true;
+      });
+    }, [anniversaryItems, onlyFollowedAlbums, followStatus, followedSet, followedIndex]);
+    useEffect(() => {
+      if (!onlyFollowedAlbums || followStatus !== "ready" || !followedIndex?.ids.size || !followedCandidates.length) return;
+      let cancelled = false;
+      const toVerify = followedCandidates.slice(0, 80).filter((item) => !rejectedHomonyms.has(item.mbid) && peekFollowedAlbumVerification(item.mbid) === null);
+      if (!toVerify.length) return;
+      Promise.all(
+        toVerify.map(async (item) => {
+          const ok = await verifyFollowedAlbumWithSpotify(item, followedIndex).catch(() => true);
+          return ok ? null : item.mbid;
+        })
+      ).then((results) => {
+        if (cancelled) return;
+        const newRejects = results.filter((id) => Boolean(id));
+        if (!newRejects.length) return;
+        setRejectedHomonyms((prev) => {
+          const next = new Set(prev);
+          newRejects.forEach((id) => next.add(id));
+          return next;
+        });
+      });
+      return () => {
+        cancelled = true;
+      };
+    }, [onlyFollowedAlbums, followStatus, followedIndex, followedCandidates]);
+    const displayedItems = useMemo(() => {
+      if (!onlyFollowedAlbums || followStatus === "error") return followedCandidates;
+      return followedCandidates.filter((item) => !rejectedHomonyms.has(item.mbid));
+    }, [followedCandidates, onlyFollowedAlbums, followStatus, rejectedHomonyms]);
+    const typeFilteredItems = useMemo(() => {
+      return displayedItems.filter((item) => shouldShowAlbumByType(item, albumTypeFilter));
+    }, [displayedItems, albumTypeFilter]);
     const genreFilteredItems = useMemo(() => {
-      if (!selectedGenres.length) return displayedItems;
+      if (!selectedGenres.length) return typeFilteredItems;
       const selected = new Set(selectedGenres);
-      return displayedItems.filter(
+      return typeFilteredItems.filter(
         (item) => classifyMainGenres(item.genres).some((genre) => selected.has(genre))
       );
-    }, [displayedItems, selectedGenres]);
+    }, [typeFilteredItems, selectedGenres]);
     const anniversaryGroups = useMemo(() => {
       const groups = /* @__PURE__ */ new Map();
       for (const item of genreFilteredItems) {
@@ -4607,7 +5068,22 @@
         /* @__PURE__ */ Spicetify.React.createElement("span", { className: "otd-settings-name otd-settings-name--stack" }, /* @__PURE__ */ Spicetify.React.createElement("span", { className: "otd-settings-option-label" }, opt.label), /* @__PURE__ */ Spicetify.React.createElement("span", { className: "otd-settings-option-desc" }, opt.desc)),
         active2 && /* @__PURE__ */ Spicetify.React.createElement("span", { className: "otd-settings-check" }, /* @__PURE__ */ Spicetify.React.createElement(CheckIcon, { size: 14 }))
       );
-    })), /* @__PURE__ */ Spicetify.React.createElement("p", { className: "otd-settings-hint" }, t(lang, "albumVersionHint"))), /* @__PURE__ */ Spicetify.React.createElement("div", { className: "otd-settings-divider" }), /* @__PURE__ */ Spicetify.React.createElement("div", { className: "otd-settings-section" }, /* @__PURE__ */ Spicetify.React.createElement("p", { className: "otd-settings-title" }, t(lang, "changeLanguage")), /* @__PURE__ */ Spicetify.React.createElement("div", { className: "otd-settings-options" }, Object.entries(LANGUAGES).map(([code, info]) => {
+    })), /* @__PURE__ */ Spicetify.React.createElement("p", { className: "otd-settings-hint" }, t(lang, "albumVersionHint"))), /* @__PURE__ */ Spicetify.React.createElement("div", { className: "otd-settings-divider" }), /* @__PURE__ */ Spicetify.React.createElement("div", { className: "otd-settings-section" }, /* @__PURE__ */ Spicetify.React.createElement("p", { className: "otd-settings-title" }, t(lang, "albumTagsTitle")), /* @__PURE__ */ Spicetify.React.createElement(
+      "button",
+      {
+        type: "button",
+        role: "switch",
+        "aria-checked": showAlbumTags,
+        className: `otd-settings-option${showAlbumTags ? " is-active" : ""}`,
+        onClick: () => {
+          const next = !showAlbumTags;
+          setShowAlbumTags(next);
+          setShowAlbumTagsState(next);
+        }
+      },
+      /* @__PURE__ */ Spicetify.React.createElement("span", { className: `otd-type-check${showAlbumTags ? " is-checked" : ""}`, "aria-hidden": "true" }, showAlbumTags ? /* @__PURE__ */ Spicetify.React.createElement(CheckIcon, { size: 12 }) : ""),
+      /* @__PURE__ */ Spicetify.React.createElement("span", { className: "otd-settings-name otd-settings-name--stack" }, /* @__PURE__ */ Spicetify.React.createElement("span", { className: "otd-settings-option-label" }, t(lang, "albumTagsToggle")), /* @__PURE__ */ Spicetify.React.createElement("span", { className: "otd-settings-option-desc" }, t(lang, "albumTagsDesc")))
+    )), /* @__PURE__ */ Spicetify.React.createElement("div", { className: "otd-settings-divider" }), /* @__PURE__ */ Spicetify.React.createElement("div", { className: "otd-settings-section" }, /* @__PURE__ */ Spicetify.React.createElement("p", { className: "otd-settings-title" }, t(lang, "changeLanguage")), /* @__PURE__ */ Spicetify.React.createElement("div", { className: "otd-settings-options" }, Object.entries(LANGUAGES).map(([code, info]) => {
       const active2 = code === lang;
       return /* @__PURE__ */ Spicetify.React.createElement(
         "button",
@@ -4703,6 +5179,7 @@
         title: t(lang, "sortAlbumsLabel"),
         onClick: () => {
           setSettingsOpen(false);
+          setTypeMenuOpen(false);
           setSortMenuOpen((open) => !open);
         }
       },
@@ -4737,7 +5214,63 @@
         /* @__PURE__ */ Spicetify.React.createElement("span", { className: "otd-settings-name" }, opt.label),
         active2 && /* @__PURE__ */ Spicetify.React.createElement("span", { className: "otd-settings-check" }, /* @__PURE__ */ Spicetify.React.createElement(CheckIcon, { size: 14 }))
       );
-    }))))), genrePickerOpen && /* @__PURE__ */ Spicetify.React.createElement(Spicetify.React.Fragment, null, /* @__PURE__ */ Spicetify.React.createElement("div", { className: "otd-backdrop", onClick: () => setGenrePickerOpen(false) }), /* @__PURE__ */ Spicetify.React.createElement("div", { className: "otd-genre-menu", id: "otd-genre-options", role: "group", "aria-label": t(lang, "genreFilter") }, /* @__PURE__ */ Spicetify.React.createElement(
+    })))), /* @__PURE__ */ Spicetify.React.createElement("div", { className: "otd-settings otd-sort-wrap" }, (() => {
+      const enabledExtraCount = ALBUM_RELEASE_CATEGORIES.filter((c) => albumTypeFilter[c]).length;
+      const updateTypeFilter = (next) => {
+        setAlbumTypeFilter(next);
+        setAlbumTypeFilterState(next);
+      };
+      return /* @__PURE__ */ Spicetify.React.createElement(Spicetify.React.Fragment, null, /* @__PURE__ */ Spicetify.React.createElement(
+        "button",
+        {
+          type: "button",
+          className: `otd-order-btn otd-sort-trigger otd-type-trigger${typeMenuOpen ? " is-open" : ""}`,
+          "aria-expanded": typeMenuOpen,
+          "aria-haspopup": "dialog",
+          "aria-label": t(lang, "releaseTypeTitle"),
+          title: t(lang, "releaseTypeTitle"),
+          onClick: () => {
+            setSettingsOpen(false);
+            setSortMenuOpen(false);
+            setTypeMenuOpen((open) => !open);
+          }
+        },
+        /* @__PURE__ */ Spicetify.React.createElement("span", null, t(lang, "releaseTypeBtn")),
+        /* @__PURE__ */ Spicetify.React.createElement("span", { className: "otd-type-count" }, enabledExtraCount, "/", ALBUM_RELEASE_CATEGORIES.length),
+        /* @__PURE__ */ Spicetify.React.createElement(ChevronIcon, { size: 12 })
+      ), typeMenuOpen && /* @__PURE__ */ Spicetify.React.createElement("div", { className: "otd-settings-menu otd-type-menu", role: "dialog", "aria-label": t(lang, "releaseTypeTitle") }, /* @__PURE__ */ Spicetify.React.createElement("p", { className: "otd-settings-title" }, t(lang, "releaseTypeTitle")), /* @__PURE__ */ Spicetify.React.createElement("div", { className: "otd-settings-options" }, ALBUM_RELEASE_CATEGORIES.map((category) => {
+        const active2 = albumTypeFilter[category];
+        return /* @__PURE__ */ Spicetify.React.createElement(
+          "button",
+          {
+            type: "button",
+            key: category,
+            role: "switch",
+            "aria-checked": active2,
+            className: `otd-settings-option otd-type-option${active2 ? " is-active" : ""}`,
+            onClick: () => updateTypeFilter({ ...albumTypeFilter, [category]: !active2 })
+          },
+          /* @__PURE__ */ Spicetify.React.createElement("span", { className: `otd-type-check${active2 ? " is-checked" : ""}`, "aria-hidden": "true" }, active2 ? /* @__PURE__ */ Spicetify.React.createElement(CheckIcon, { size: 12 }) : ""),
+          /* @__PURE__ */ Spicetify.React.createElement("span", { className: "otd-settings-name" }, t(lang, `releaseType_${category}`))
+        );
+      })), /* @__PURE__ */ Spicetify.React.createElement("div", { className: "otd-type-actions" }, /* @__PURE__ */ Spicetify.React.createElement(
+        "button",
+        {
+          type: "button",
+          className: "otd-type-quick",
+          onClick: () => updateTypeFilter(defaultAlbumTypeFilter())
+        },
+        t(lang, "releaseTypeStudioOnly")
+      ), /* @__PURE__ */ Spicetify.React.createElement(
+        "button",
+        {
+          type: "button",
+          className: "otd-type-quick",
+          onClick: () => updateTypeFilter(allEnabledAlbumTypeFilter())
+        },
+        t(lang, "releaseTypeShowAll")
+      )), /* @__PURE__ */ Spicetify.React.createElement("p", { className: "otd-settings-hint" }, t(lang, "releaseTypeHint"))));
+    })())), genrePickerOpen && /* @__PURE__ */ Spicetify.React.createElement(Spicetify.React.Fragment, null, /* @__PURE__ */ Spicetify.React.createElement("div", { className: "otd-backdrop", onClick: () => setGenrePickerOpen(false) }), /* @__PURE__ */ Spicetify.React.createElement("div", { className: "otd-genre-menu", id: "otd-genre-options", role: "group", "aria-label": t(lang, "genreFilter") }, /* @__PURE__ */ Spicetify.React.createElement(
       "button",
       {
         className: "otd-genre-close",
@@ -4790,11 +5323,12 @@
         items: yearItems,
         currentYear,
         lang,
+        showTags: showAlbumTags,
         dayKey: monthDay,
         onPreview: openPreview,
         sectionRef: getSectionRef(year)
       }
-    )) : /* @__PURE__ */ Spicetify.React.createElement("p", { className: "otd-empty" }, selectedGenres.length > 0 ? !items.some((item) => item.genres?.length) ? t(lang, "emptyGenresMsg") : t(lang, "emptyNoMatch") : onlyFollowedAlbums && followStatus === "ready" ? t(lang, "followedEmpty") : t(lang, "emptyNone"))), /* @__PURE__ */ Spicetify.React.createElement("p", { className: "otd-attribution" }, t(lang, tab === "albums" ? "attribution" : "attributionBirthdays"))), preview && createPortal(
+    )) : /* @__PURE__ */ Spicetify.React.createElement("p", { className: "otd-empty" }, selectedGenres.length > 0 ? !items.some((item) => item.genres?.length) ? t(lang, "emptyGenresMsg") : t(lang, "emptyNoMatch") : displayedItems.length > 0 && typeFilteredItems.length === 0 ? t(lang, "emptyTypeFiltered") : onlyFollowedAlbums && followStatus === "ready" ? t(lang, "followedEmpty") : t(lang, "emptyNone"))), /* @__PURE__ */ Spicetify.React.createElement("p", { className: "otd-attribution" }, t(lang, tab === "albums" ? "attribution" : "attributionBirthdays"))), preview && createPortal(
       /* @__PURE__ */ Spicetify.React.createElement(
         "div",
         {
